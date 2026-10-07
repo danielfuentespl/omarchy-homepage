@@ -35,6 +35,12 @@ Once the repository is hosted, the normal Git-managed install is `omarchy plugin
 
 Set the Homepage address in Omarchy's plugin settings or in the panel's **Configure** form. Use an HTTP(S) address, optionally with a safe path; credentials, query strings and fragments are rejected. **Open Homepage** uses this address. Homepage documents its `base` setting as the document base URL; its current UI calls `/api/services` with a root-relative path, so OmaHomepage addresses the services and MCP APIs at the URL origin (`/api/services` and the configured `mcpPath`). A reverse proxy must route those API paths as Homepage expects; the plugin does not assume the document path is an API prefix. HTTPS certificate checks remain on. For a private CA, set the absolute PEM certificate path in plugin settings. No homelab address is built in.
 
+You can also configure the bar widget from a terminal:
+
+```sh
+omarchy bar set com.blogvirtualizado.omaops.homepage baseUrl "https://homepage.example.com"
+```
+
 The panel refreshes `/api/services`, filters by group/name/description and opens safe HTTP(S) links through the desktop. The API connection state says whether Homepage replied; each service status stays `UNKNOWN`.
 
 If Homepage has `HOMEPAGE_AUTH_ENABLED=true`, `/api/services` requires the Homepage browser session. The MCP bearer token does not authorize this API endpoint, so the service list may show **AUTH REQUIRED** even when MCP editing works. This release does not ask for or persist a Homepage session cookie.
@@ -82,7 +88,7 @@ omarchy plugin validate .
 git diff --check
 ```
 
-Tests use synthetic data, local HTTP/TLS servers, and a temporary CA; they do not contact your Homepage instance. See [Development](DEVELOPMENT.md).
+Tests use synthetic data, an in-memory Homepage MCP fixture, and temporary HTTP/TLS servers with a temporary CA; they do not contact your Homepage instance. The runner prints each suite's pass/skip counts. Network tests need local loopback access and explicitly skip when a local sandbox blocks it; CI fails if those integration tests cannot run. See [Development](DEVELOPMENT.md).
 
 ## Project
 
