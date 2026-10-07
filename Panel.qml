@@ -351,7 +351,9 @@ Ui.Panel {
     owner: root.barIdentity
     bar: root.bar
     open: root.opened
-    centerOnBar: true
+    // Keep the native KeyboardPanel anchor tied to the clicked bar widget.
+    // centerOnBar places the card at the monitor center regardless of section.
+    centerOnBar: false
     focusTarget: keyCatcher
     contentWidth: popup.fittedContentWidth(Style.space(650))
     contentHeight: popup.fittedContentHeight(contentColumn.implicitHeight, Style.space(680))
