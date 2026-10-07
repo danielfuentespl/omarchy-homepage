@@ -164,7 +164,8 @@ function serviceFields(raw, groupName) {
     weight: typeof raw.weight === "number" && isFinite(raw.weight) ? raw.weight : cleanText(raw.weight, 32),
     group: groupName,
     dockerLinked: hasDockerLink,
-    status: "UNKNOWN"
+    // Homepage's services endpoint does not provide a reliable live health state.
+    status: ""
   };
 }
 
@@ -229,15 +230,55 @@ function filterGroups(groups, query) {
   if (!needle) return groups;
   const result = [];
   for (const group of groups || []) {
-    const groupMatches = group.name.toLocaleLowerCase().includes(needle);
+    const groupMatches = (group.path || group.name).toLocaleLowerCase().includes(needle);
     const matchedServices = groupMatches ? group.services : group.services.filter(service =>
       service.name.toLocaleLowerCase().includes(needle) || service.description.toLocaleLowerCase().includes(needle));
     const children = filterGroups(group.groups, needle);
+    // Search results only include groups that lead to at least one service.
     if (matchedServices.length || children.length) {
       result.push({ name: group.name, path: group.path, services: matchedServices, groups: children });
     }
   }
   return result;
+}
+
+function countGroups(groups) {
+  let count = 0;
+  for (const group of groups || []) count += 1 + countGroups(group.groups);
+  return count;
+}
+
+function countServices(groups) {
+  let count = 0;
+  for (const group of groups || []) count += (group.services || []).length + countServices(group.groups);
+  return count;
+}
+
+function displayRows(groups, searching, expandedOverrides, rows, depth) {
+  const output = rows || [];
+  const currentDepth = depth || 0;
+  const overrides = expandedOverrides || {};
+  for (const group of groups || []) {
+    const serviceCount = countServices([group]);
+    const isExpanded = searching || Object.prototype.hasOwnProperty.call(overrides, group.path)
+      ? searching || overrides[group.path] === true
+      : serviceCount <= 4;
+    output.push({
+      type: "group",
+      name: group.name,
+      path: group.path,
+      count: serviceCount,
+      depth: currentDepth,
+      expanded: isExpanded,
+      expandable: serviceCount > 0
+    });
+    if (!isExpanded) continue;
+    for (const service of group.services || []) {
+      output.push({ type: "service", service, depth: currentDepth + 1 });
+    }
+    displayRows(group.groups, searching, overrides, output, currentDepth + 1);
+  }
+  return output;
 }
 
 function flattenGroups(groups, result) {
@@ -277,6 +318,9 @@ if (typeof module !== "undefined") {
     normalizeMcpPath,
     parseServices,
     filterGroups,
+    countGroups,
+    countServices,
+    displayRows,
     flattenGroups,
     clampSeconds,
     statusAfterFailure,

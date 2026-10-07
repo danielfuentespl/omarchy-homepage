@@ -38,7 +38,7 @@ test("accepts the current Homepage nested normalized group response", () => {
   assert.equal(result.groups[0].groups[0].path, "Infrastructure / Network");
   assert.equal(result.groups[0].groups[0].services[0].name, "Pi-hole");
   assert.equal(result.services[0].dockerLinked, true);
-  assert.equal(result.services[0].status, "UNKNOWN");
+  assert.equal(result.services[0].status, "");
   assert.equal(result.services[2].linkAvailable, false);
   assert.equal(JSON.stringify(result).includes("ignored"), false);
 });
@@ -61,6 +61,101 @@ test("searches nested groups, names and descriptions while preserving hierarchy"
   ]));
   assert.equal(Model.filterGroups(result.groups, "grafana")[0].groups[0].services[0].name, "Grafana");
   assert.equal(Model.filterGroups(result.groups, "Infrastructure")[0].services[0].name, "Proxmox");
+});
+
+test("counts groups and services from the normalized Homepage hierarchy", () => {
+  const result = Model.parseServices(JSON.stringify([
+    { name: "Hardware", services: [{ name: "NAS" }, { name: "Router" }], groups: [
+      { name: "Power", services: [{ name: "UPS" }], groups: [] }
+    ] },
+    { name: "Empty", services: [], groups: [] }
+  ]));
+  assert.equal(Model.countGroups(result.groups), 3);
+  assert.equal(Model.countServices(result.groups), 3);
+  assert.equal(Model.countServices([result.groups[0]]), 3);
+});
+
+test("searches by service name and reports only matching services", () => {
+  const result = Model.parseServices(JSON.stringify([
+    { name: "Network", services: [{ name: "Router" }, { name: "Switch" }], groups: [] },
+    { name: "Media", services: [{ name: "Player" }], groups: [] }
+  ]));
+  const matches = Model.filterGroups(result.groups, "switch");
+  assert.equal(Model.countGroups(matches), 1);
+  assert.equal(Model.countServices(matches), 1);
+  assert.equal(matches[0].services[0].name, "Switch");
+});
+
+test("searches by group name and shows services from matching groups", () => {
+  const result = Model.parseServices(JSON.stringify([
+    { name: "Network", services: [{ name: "Router" }, { name: "Switch" }], groups: [] },
+    { name: "Media", services: [{ name: "Player" }], groups: [] }
+  ]));
+  const matches = Model.filterGroups(result.groups, "network");
+  assert.equal(Model.countGroups(matches), 1);
+  assert.deepEqual(matches[0].services.map(service => service.name), ["Router", "Switch"]);
+});
+
+test("searches service descriptions", () => {
+  const result = Model.parseServices(JSON.stringify([
+    { name: "Lab", services: [
+      { name: "One", description: "metrics dashboard" },
+      { name: "Two", description: "file storage" }
+    ], groups: [] }
+  ]));
+  const matches = Model.filterGroups(result.groups, "dashboard");
+  assert.equal(Model.countServices(matches), 1);
+  assert.equal(matches[0].services[0].name, "One");
+});
+
+test("keeps empty groups when idle but excludes them from search results", () => {
+  const result = Model.parseServices(JSON.stringify([
+    { name: "Empty", services: [], groups: [] },
+    { name: "Lab", services: [{ name: "Node" }], groups: [] }
+  ]));
+  assert.equal(Model.countGroups(result.groups), 2);
+  assert.equal(Model.filterGroups(result.groups, "empty").length, 0);
+});
+
+test("preserves services without href as non-openable rows", () => {
+  const result = Model.parseServices(JSON.stringify([
+    { name: "Lab", services: [{ name: "No link" }], groups: [] }
+  ]));
+  assert.equal(result.services[0].href, "");
+  assert.equal(result.services[0].linkAvailable, false);
+});
+
+test("does not present UNKNOWN as a real service health status", () => {
+  const result = Model.parseServices(JSON.stringify([
+    { name: "Lab", services: [{ name: "Node", status: "UNKNOWN" }], groups: [] }
+  ]));
+  assert.equal(result.services[0].status, "");
+  assert.notEqual(result.services[0].status, "UNKNOWN");
+});
+
+test("shows matching groups, hides groups without results, and expands matches", () => {
+  const result = Model.parseServices(JSON.stringify([
+    { name: "Network", services: [{ name: "Router" }], groups: [] },
+    { name: "Media", services: [{ name: "Player" }], groups: [] }
+  ]));
+  const matches = Model.filterGroups(result.groups, "router");
+  assert.deepEqual(matches.map(group => group.name), ["Network"]);
+  const rows = Model.displayRows(matches, true, { "Network": false });
+  assert.equal(rows[0].type, "group");
+  assert.equal(rows[0].expanded, true);
+  assert.equal(rows[1].type, "service");
+});
+
+test("expands small groups by default and collapses larger groups", () => {
+  const result = Model.parseServices(JSON.stringify([
+    { name: "Small", services: [{ name: "A" }, { name: "B" }], groups: [] },
+    { name: "Large", services: Array.from({ length: 8 }, (_, i) => ({ name: "Service " + i })), groups: [] }
+  ]));
+  const rows = Model.displayRows(result.groups, false, {});
+  assert.equal(rows[0].expanded, true);
+  assert.equal(rows[3].expanded, false);
+  const toggled = Model.displayRows(result.groups, false, { Large: true });
+  assert.equal(toggled.some(row => row.type === "service" && row.service.name === "Service 0"), true);
 });
 
 test("rejects malformed JSON, wrong root shape, and oversized payloads", () => {

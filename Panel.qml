@@ -18,6 +18,7 @@ Ui.Panel {
   property var hostWidget: null
   property bool popoutSwitchClosing: false
   property string searchText: ""
+  property var expandedGroups: ({})
   property string notice: ""
   property bool configEditing: false
   property string configDraft: ""
@@ -54,9 +55,21 @@ Ui.Panel {
     return foreground
   }
   readonly property var visibleGroups: Model.filterGroups(service.serviceGroups || [], searchText)
-  readonly property var displayGroups: Model.flattenGroups(visibleGroups)
+  readonly property bool searching: searchText.trim() !== ""
+  readonly property var displayRows: Model.displayRows(visibleGroups, searching, expandedGroups)
+  readonly property int totalGroupCount: Model.countGroups(service.serviceGroups || [])
+  readonly property int totalServiceCount: Model.countServices(service.serviceGroups || [])
+  readonly property int matchingServiceCount: Model.countServices(visibleGroups)
   readonly property bool writeControlsReady: service.editingEnabled === true && service.mcpAuthenticated === true
       && service.mcpWriteEnabled === true && service.mcpBusy !== true
+
+  function toggleGroup(path, expanded) {
+    if (searching) return
+    const next = ({})
+    for (const key in expandedGroups) next[key] = expandedGroups[key]
+    next[path] = !expanded
+    expandedGroups = next
+  }
 
   QtObject {
     id: dummyService
@@ -341,7 +354,7 @@ Ui.Panel {
     centerOnBar: true
     focusTarget: keyCatcher
     contentWidth: popup.fittedContentWidth(Style.space(650))
-    contentHeight: popup.fittedContentHeight(contentColumn.implicitHeight)
+    contentHeight: popup.fittedContentHeight(contentColumn.implicitHeight, Style.space(680))
 
     Ui.PanelKeyCatcher {
       id: keyCatcher
@@ -361,17 +374,15 @@ Ui.Panel {
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
-      Flickable {
+      ColumnLayout {
         anchors.fill: parent
-        contentWidth: width
-        contentHeight: contentColumn.implicitHeight
-        clip: true
-        boundsBehavior: Flickable.StopAtBounds
+        spacing: Style.space(8)
 
         ColumnLayout {
           id: contentColumn
-          width: parent.width
-          spacing: Style.space(10)
+          Layout.fillWidth: true
+          Layout.fillHeight: true
+          spacing: Style.space(8)
 
           RowLayout {
             Layout.fillWidth: true
@@ -419,6 +430,16 @@ Ui.Panel {
 
           Text {
             Layout.fillWidth: true
+            text: root.totalGroupCount + " groups · " + root.totalServiceCount + " services" +
+              (root.searching ? " · " + root.matchingServiceCount + " matches" : "")
+            textFormat: Text.PlainText
+            color: root.foreground
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Text {
+            Layout.fillWidth: true
             visible: root.service.apiState !== "ONLINE"
             text: root.service.apiMessage
             textFormat: Text.PlainText
@@ -454,93 +475,104 @@ Ui.Panel {
             font.pixelSize: Style.font.bodySmall
           }
 
-          Text {
+          Flickable {
+            id: resultsFlickable
             Layout.fillWidth: true
-            visible: root.service.serviceGroups.length === 0 && root.service.apiState === "ONLINE"
-            text: root.searchText ? "No services match this search." : "Homepage returned no services."
-            textFormat: Text.PlainText
-            color: root.foreground
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.body
-          }
+            Layout.fillHeight: true
+            Layout.minimumHeight: Style.space(120)
+            Layout.preferredHeight: Style.space(360)
+            contentWidth: width
+            contentHeight: resultsColumn.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AsNeeded }
 
-          Repeater {
-            model: root.displayGroups
-            delegate: ColumnLayout {
-              required property var modelData
-              Layout.fillWidth: true
-              spacing: Style.space(4)
+            ColumnLayout {
+              id: resultsColumn
+              width: resultsFlickable.width
+              spacing: Style.space(5)
+
               Text {
                 Layout.fillWidth: true
-                text: modelData.path
+                visible: root.service.apiState === "ONLINE" && root.visibleGroups.length === 0
+                text: root.searching ? "No services match this search." : "Homepage returned no services."
                 textFormat: Text.PlainText
                 color: root.foreground
                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.heading
-                font.bold: true
+                font.pixelSize: Style.font.body
               }
-              Repeater {
-                model: modelData.services
-                delegate: Rectangle {
-                  required property var modelData
-                  Layout.fillWidth: true
-                  implicitHeight: serviceRow.implicitHeight + Style.space(12)
-                  radius: Math.min(4, Style.cornerRadius)
-                  color: root.bar ? root.bar.background : Color.popups.background
 
-                  RowLayout {
-                    id: serviceRow
-                    anchors.fill: parent
-                    anchors.margins: Style.space(7)
-                    spacing: Style.space(8)
-                    ColumnLayout {
-                      Layout.fillWidth: true
-                      spacing: Style.space(2)
-                      Text {
+              Repeater {
+                model: root.displayRows
+                delegate: Item {
+                  required property var modelData
+                  readonly property var serviceData: modelData.service ||
+                    ({ name: "", status: "", description: "", linkAvailable: false, href: "" })
+                  Layout.fillWidth: true
+                  implicitHeight: groupButton.visible ? groupButton.implicitHeight : serviceCard.implicitHeight
+
+                  Ui.Button {
+                    id: groupButton
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    visible: modelData.type === "group"
+                    text: "\u00a0".repeat(modelData.depth * 2) +
+                      (modelData.expanded ? "▾ " : "▸ ") + modelData.name + " · " + modelData.count
+                    enabled: modelData.type === "group" && modelData.expandable === true && !root.searching
+                    onClicked: root.toggleGroup(modelData.path, modelData.expanded)
+                  }
+
+                  Rectangle {
+                    id: serviceCard
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    visible: modelData.type === "service"
+                    implicitHeight: serviceColumn.implicitHeight + Style.space(8)
+                    radius: Math.min(4, Style.cornerRadius)
+                    color: root.bar ? root.bar.background : Color.popups.background
+
+                    RowLayout {
+                      anchors.fill: parent
+                      anchors.margins: Style.space(5)
+                      spacing: Style.space(6)
+                      Item { implicitWidth: Style.space(12) * modelData.depth }
+                      ColumnLayout {
+                        id: serviceColumn
                         Layout.fillWidth: true
-                        text: modelData.name + " · UNKNOWN"
-                        textFormat: Text.PlainText
-                        elide: Text.ElideRight
-                        color: root.foreground
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.body
-                        font.bold: true
+                        spacing: Style.space(1)
+                        Text {
+                          Layout.fillWidth: true
+                          text: serviceData.name +
+                            (serviceData.status && serviceData.status !== "UNKNOWN" ? " · " + serviceData.status : "")
+                          textFormat: Text.PlainText
+                          elide: Text.ElideRight
+                          color: root.foreground
+                          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                          font.pixelSize: Style.font.body
+                          font.bold: true
+                        }
+                        Text {
+                          Layout.fillWidth: true
+                          visible: serviceData.description !== ""
+                          text: serviceData.description
+                          textFormat: Text.PlainText
+                          elide: Text.ElideRight
+                          color: root.foreground
+                          opacity: 0.75
+                          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                          font.pixelSize: Style.font.bodySmall
+                        }
                       }
-                      Text {
-                        Layout.fillWidth: true
-                        visible: modelData.description !== ""
-                        text: modelData.description
-                        textFormat: Text.PlainText
-                        elide: Text.ElideRight
-                        color: root.foreground
-                        opacity: 0.75
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.bodySmall
+                      Ui.Button {
+                        text: "Open"
+                        visible: serviceData.linkAvailable
+                        enabled: serviceData.linkAvailable
+                        onClicked: root.openUrl(serviceData.href)
                       }
-                      Text {
-                        Layout.fillWidth: true
-                        visible: modelData.dockerLinked
-                        text: "Docker integration: " + (modelData.server || "default") +
-                              (modelData.container ? " / " + modelData.container : "") +
-                              " · Homepage API does not identify the service source"
-                        textFormat: Text.PlainText
-                        wrapMode: Text.Wrap
-                        color: root.foreground
-                        opacity: 0.7
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.bodySmall
-                      }
-                    }
-                    Ui.Button {
-                      text: "Open"
-                      enabled: modelData.linkAvailable
-                      onClicked: root.openUrl(modelData.href)
                     }
                   }
                 }
               }
-            }
-          }
 
           Rectangle {
             Layout.fillWidth: true
@@ -645,6 +677,8 @@ Ui.Panel {
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.bodySmall
           }
+            }
+          }
 
           RowLayout {
             Layout.fillWidth: true
@@ -652,13 +686,13 @@ Ui.Panel {
             Ui.Button {
               text: "+ Add service"
               enabled: root.writeControlsReady
-              visible: root.service.editingEnabled
+              visible: root.writeControlsReady
               onClicked: { root.addServiceVisible = !root.addServiceVisible; root.yamlEditorOpen = false; root.notice = "" }
             }
             Ui.Button {
               text: "Edit services.yaml"
               enabled: root.writeControlsReady && !root.service.mcpBusy
-              visible: root.service.editingEnabled
+              visible: root.writeControlsReady && !root.service.mcpBusy
               onClicked: { root.addServiceVisible = false; root.openYamlEditor() }
             }
             Item { Layout.fillWidth: true }
