@@ -70,7 +70,7 @@ Item {
     if (key === _configKey) return;
     _configKey = key;
     cancelOperations();
-    apiState = baseUrl ? "LOADING" : "NOT CONFIGURED";
+    apiState = baseUrl ? "CONNECTING" : "NOT CONFIGURED";
     apiMessage = baseUrl ? "Connecting to Homepage." : "Set a Homepage address in plugin settings.";
     serviceGroups = [];
     services = [];
@@ -120,7 +120,7 @@ Item {
     };
     _apiCycle = cycle;
     refreshing = true;
-    apiState = "LOADING";
+    apiState = "CONNECTING";
     apiMessage = "Fetching Homepage services.";
     const id = ++_requestId;
     if (!apiTransport.start(id, {
