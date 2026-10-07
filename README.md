@@ -15,11 +15,23 @@ Every listed service is marked `UNKNOWN`: Homepage's service API describes confi
 
 ## Install and configure
 
-Install from a local checkout for testing:
+For a local checkout, copy the plugin directory into Omarchy's plugin directory, then rescan and add its bar widget. Replace `<checkout>` with this repository's path; the guard avoids overwriting an existing installation.
 
 ```sh
-omarchy plugin add /path/to/omarchy-homepage --enable
+checkout=/path/to/omarchy-homepage
+plugin_id=com.blogvirtualizado.omaops.homepage
+plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$plugin_id"
+test ! -e "$plugin_dir" || { echo "Plugin directory already exists: $plugin_dir" >&2; exit 1; }
+mkdir -p "$(dirname "$plugin_dir")"
+mkdir -p "$plugin_dir"
+tar --exclude=.git -C "$checkout" -cf - . | tar -C "$plugin_dir" -xf -
+omarchy-shell shell rescanPlugins
+omarchy bar put "$plugin_id"
 ```
+
+Remove a local test copy with `omarchy plugin disable "$plugin_id"`, delete the exact `$plugin_dir` directory, and run `omarchy-shell shell rescanPlugins` again.
+
+Once the repository is hosted, the normal Git-managed install is `omarchy plugin add https://github.com/danielfuentespl/omarchy-homepage.git --enable`; remove it later with `omarchy plugin remove com.blogvirtualizado.omaops.homepage`.
 
 Set the Homepage address in Omarchy's plugin settings or in the panel's **Configure** form. Use an HTTP(S) address, optionally with a safe path; credentials, query strings and fragments are rejected. **Open Homepage** uses this address. Homepage documents its `base` setting as the document base URL; its current UI calls `/api/services` with a root-relative path, so OmaHomepage addresses the services and MCP APIs at the URL origin (`/api/services` and the configured `mcpPath`). A reverse proxy must route those API paths as Homepage expects; the plugin does not assume the document path is an API prefix. HTTPS certificate checks remain on. For a private CA, set the absolute PEM certificate path in plugin settings. No homelab address is built in.
 
