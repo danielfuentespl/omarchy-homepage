@@ -79,7 +79,51 @@ function makeToolCall(id, name, args) {
   return rpcRequest(id, "tools/call", { name, arguments: args || {} });
 }
 
+function writeAndVerifyServicesYaml(callTool, content, callback) {
+  callTool("validate_config_file", { file: "services.yaml", content }, function(validated) {
+    if (!validated.ok) { callback(validated); return; }
+    const validation = parseValidation(validated.result);
+    if (!validation.ok || !validation.valid) {
+      callback({ ok: false, error: validation.error || "services.yaml failed validation.", mark: validation.mark || null });
+      return;
+    }
+    callTool("write_config_file", { file: "services.yaml", content }, function(written) {
+      if (!written.ok) { callback(written); return; }
+      const writeText = textFromToolResult(written.result);
+      let confirmation;
+      try { confirmation = writeText.ok ? JSON.parse(writeText.text) : null; } catch (_) { confirmation = null; }
+      if (!confirmation || confirmation.written !== "services.yaml") {
+        callback({ ok: false, error: "Homepage did not confirm writing services.yaml.", writeMayHaveChanged: true });
+        return;
+      }
+      callTool("read_config_file", { file: "services.yaml" }, function(readback) {
+        if (!readback.ok) { callback({ ok: false, error: readback.error, writeMayHaveChanged: true }); return; }
+        const actual = textFromToolResult(readback.result);
+        callback(actual.ok && actual.text === content
+          ? { ok: true, message: "services.yaml saved and verified by read-back." }
+          : { ok: false, error: actual.ok ? "Read-back did not match the saved content." : actual.error, writeMayHaveChanged: true });
+      });
+    });
+  });
+}
+
+function addAndVerifyService(callTool, args, callback) {
+  callTool("add_service", args, function(response) {
+    if (!response.ok) { callback(response); return; }
+    const added = parseAddService(response.result);
+    if (!added.ok) { callback(added); return; }
+    callTool("read_config_file", { file: "services.yaml" }, function(readback) {
+      if (!readback.ok) { callback(readback); return; }
+      const actual = textFromToolResult(readback.result);
+      callback(actual.ok && actual.text === added.content
+        ? { ok: true, message: "Service added and verified by read-back." }
+        : { ok: false, error: actual.ok ? "Service add read-back did not match the write." : actual.error });
+    });
+  });
+}
+
 if (typeof module !== "undefined") {
   module.exports = { rpcRequest, parseRpcResponse, textFromToolResult, parseTools,
-    parseWritableConfigFiles, parseValidation, parseAddService, makeToolCall };
+    parseWritableConfigFiles, parseValidation, parseAddService, makeToolCall,
+    writeAndVerifyServicesYaml, addAndVerifyService };
 }

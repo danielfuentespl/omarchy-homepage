@@ -295,33 +295,12 @@ Item {
     if (!currentEditingCycle()) { callback({ ok: false, error: "Enable editing and authenticated write access first." }); return; }
     if (typeof content !== "string" || content.length > 512 * 1024) { callback({ ok: false, error: "services.yaml exceeds the size limit." }); return; }
     operationBusy = true;
-    callRawTool(_cycle, "validate_config_file", { file: "services.yaml", content }, function(validationResult) {
-      if (!validationResult.ok) { operationBusy = false; callback(validationResult); return; }
-      const validation = Mcp.parseValidation(validationResult.result);
-      if (!validation.ok || !validation.valid) {
-        operationBusy = false;
-        callback({ ok: false, error: validation.error || "services.yaml failed validation.", mark: validation.mark || null });
-        return;
-      }
-      callRawTool(_cycle, "write_config_file", { file: "services.yaml", content }, function(written) {
-        if (!written.ok) { operationBusy = false; callback(written); return; }
-        const writtenText = Mcp.textFromToolResult(written.result);
-        let confirmation;
-        try { confirmation = writtenText.ok ? JSON.parse(writtenText.text) : null; } catch (_) { confirmation = null; }
-        if (!confirmation || confirmation.written !== "services.yaml") {
-          operationBusy = false;
-          callback({ ok: false, error: "Homepage did not confirm writing services.yaml.", writeMayHaveChanged: true });
-          return;
-        }
-        callRawTool(_cycle, "read_config_file", { file: "services.yaml" }, function(readback) {
-          if (!readback.ok) { operationBusy = false; callback({ ok: false, error: readback.error, writeMayHaveChanged: true }); return; }
-          const actual = Mcp.textFromToolResult(readback.result);
-          operationBusy = false;
-          callback(actual.ok && actual.text === content
-            ? { ok: true, message: "services.yaml saved and verified by read-back." }
-            : { ok: false, error: actual.ok ? "Read-back did not match the saved content." : actual.error, writeMayHaveChanged: true });
-        });
-      });
+    const cycle = _cycle;
+    Mcp.writeAndVerifyServicesYaml(function(name, args, done) {
+      root.callRawTool(cycle, name, args, done);
+    }, content, function(result) {
+      operationBusy = false;
+      callback(result);
     });
   }
 
@@ -353,18 +332,12 @@ Item {
     if (siteMonitor) safeService.siteMonitor = siteMonitor;
     if (server) safeService.server = server;
     if (container) safeService.container = container;
-    callRawTool(_cycle, "add_service", { group: cleanGroup, name: cleanName, service: safeService }, function(response) {
-      if (!response.ok) { operationBusy = false; callback(response); return; }
-      const added = Mcp.parseAddService(response.result);
-      if (!added.ok) { operationBusy = false; callback(added); return; }
-      callRawTool(_cycle, "read_config_file", { file: "services.yaml" }, function(readback) {
-        if (!readback.ok) { operationBusy = false; callback(readback); return; }
-        const actual = Mcp.textFromToolResult(readback.result);
-        operationBusy = false;
-        callback(actual.ok && actual.text === added.content
-          ? { ok: true, message: "Service added and verified by read-back." }
-          : { ok: false, error: actual.ok ? "Service add read-back did not match the write." : actual.error });
-      });
+    const cycle = _cycle;
+    Mcp.addAndVerifyService(function(tool, args, done) {
+      root.callRawTool(cycle, tool, args, done);
+    }, { group: cleanGroup, name: cleanName, service: safeService }, function(result) {
+      operationBusy = false;
+      callback(result);
     });
   }
 

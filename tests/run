@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-node --test tests/model.test.js tests/homepage-api.test.js tests/mcp-client.test.js tests/transport.test.js
+for test_file in tests/*.test.js; do
+  node "$test_file"
+done
 python3 tests/manifest.test.py
