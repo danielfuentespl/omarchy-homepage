@@ -43,3 +43,25 @@ test("requires add_service to confirm its YAML result for a later read-back", ()
   assert.equal(result.name, "Jellyfin");
   assert.equal(Mcp.parseAddService({ content: [{ type: "text", text: "not json" }] }).ok, false);
 });
+
+test("stops the YAML workflow when its configuration generation becomes stale before write", async () => {
+  let generation = 1;
+  const calls = [];
+  const callTool = (name, args, callback) => {
+    if (generation !== 1) {
+      callback({ ok: false, error: "Homepage MCP configuration changed; stale operation rejected." });
+      return;
+    }
+    calls.push(name);
+    if (name === "validate_config_file") {
+      generation++;
+      callback({ ok: true, result: { content: [{ type: "text", text: JSON.stringify({ valid: true }) }] } });
+      return;
+    }
+    callback({ ok: true, result: { content: [{ type: "text", text: JSON.stringify({ written: "services.yaml" }) }] } });
+  };
+  const result = await new Promise(resolve => Mcp.writeAndVerifyServicesYaml(callTool, "- Test:\n", resolve));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /stale operation rejected/);
+  assert.deepEqual(calls, ["validate_config_file"], "no stale write request should be sent");
+});
