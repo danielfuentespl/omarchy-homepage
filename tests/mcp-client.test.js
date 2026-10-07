@@ -49,7 +49,7 @@ test("stops the YAML workflow when its configuration generation becomes stale be
   const calls = [];
   const callTool = (name, args, callback) => {
     if (generation !== 1) {
-      callback({ ok: false, error: "Homepage MCP configuration changed; stale operation rejected." });
+      callback({ ok: false, requestStarted: false, error: "Homepage MCP configuration changed; stale operation rejected." });
       return;
     }
     calls.push(name);
@@ -63,5 +63,20 @@ test("stops the YAML workflow when its configuration generation becomes stale be
   const result = await new Promise(resolve => Mcp.writeAndVerifyServicesYaml(callTool, "- Test:\n", resolve));
   assert.equal(result.ok, false);
   assert.match(result.error, /stale operation rejected/);
+  assert.equal(result.writeMayHaveChanged, undefined);
   assert.deepEqual(calls, ["validate_config_file"], "no stale write request should be sent");
+});
+
+test("flags an interrupted write or add request as potentially changed", async () => {
+  const validation = { ok: true, result: { content: [{ type: "text", text: JSON.stringify({ valid: true }) }] } };
+  const interrupted = { ok: false, requestStarted: true, error: "request cancelled" };
+  const writeResult = await new Promise(resolve => {
+    Mcp.writeAndVerifyServicesYaml((name, args, callback) => callback(name === "validate_config_file" ? validation : interrupted), "- Test:\n", resolve);
+  });
+  assert.equal(writeResult.writeMayHaveChanged, true);
+  assert.equal(writeResult.error, "request cancelled");
+
+  const addResult = await new Promise(resolve => Mcp.addAndVerifyService((_name, _args, callback) => callback(interrupted), {}, resolve));
+  assert.equal(addResult.writeMayHaveChanged, true);
+  assert.equal(addResult.error, "request cancelled");
 });

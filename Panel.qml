@@ -286,6 +286,9 @@ Ui.Panel {
       container: newContainer
     }, function(result) {
       notice = result.ok ? result.message : result.error
+      if (!result.ok && result.writeMayHaveChanged === true) {
+        notice += " The request may have changed Homepage; check the service list before trying again."
+      }
       if (result.ok) {
         addServiceVisible = false
         newName = ""

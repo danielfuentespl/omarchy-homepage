@@ -174,7 +174,7 @@ Item {
 
   function addService(group, name, service, callback) {
     mcpClient.addService(group, name, service, function(result) {
-      if (result.ok) refresh();
+      if (result.ok || result.writeMayHaveChanged === true) refresh();
       callback(result);
     });
   }
@@ -183,7 +183,7 @@ Item {
   function validateServicesYaml(content, callback) { mcpClient.validateServicesYaml(content, callback); }
   function writeServicesYaml(content, callback) {
     mcpClient.writeServicesYaml(content, function(result) {
-      if (result.ok) refresh();
+      if (result.ok || result.writeMayHaveChanged === true) refresh();
       callback(result);
     });
   }

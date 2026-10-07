@@ -20,6 +20,7 @@ Item {
   property int _requestId: 0
   property var _cycle: null
   property var _requestCallback: null
+  property var _requestCancelCallback: null
   property var _lookup: null
   property bool _checking: false
 
@@ -36,13 +37,16 @@ Item {
       lookup.running = false;
       lookup.destroy();
     }
+    var cancelRequest = _requestCancelCallback;
+    _requestCancelCallback = null;
+    _requestCallback = null;
     var active = transport.activeProcess;
     if (active) transport.cancel(active.requestId);
-    _requestCallback = null;
     _cycle = null;
     _token = "";
     _checking = false;
     operationBusy = false;
+    if (cancelRequest) cancelRequest();
   }
 
   function reset() {
@@ -198,10 +202,27 @@ Item {
       callback({ ok: false, httpStatus: 0, error: "Homepage MCP credentials require HTTPS." });
       return;
     }
+    var settled = false;
+    function finish(result) {
+      if (settled) return;
+      settled = true;
+      if (_requestCancelCallback === cancelRequest) _requestCancelCallback = null;
+      result.requestStarted = requestStarted;
+      callback(result);
+    }
+    var cancelRequest = function() {
+      finish({ ok: false, httpStatus: 0, error: "Homepage MCP request cancelled because its configuration changed." });
+    };
+    var requestStarted = false;
+    _requestCancelCallback = cancelRequest;
     _requestCallback = function(id, exitCode, statusCode, contentType, responseBody, errorKind, errorMessage) {
-      if (!current(cycle)) return;
+      if (settled) return;
+      if (!current(cycle)) {
+        finish({ ok: false, httpStatus: 0, error: "Homepage MCP request cancelled because its configuration changed." });
+        return;
+      }
       if (exitCode !== 0) {
-        callback({ ok: false, httpStatus: 0, error: errorMessage || "Homepage MCP request failed." });
+        finish({ ok: false, httpStatus: 0, error: errorMessage || "Homepage MCP request failed." });
         return;
       }
       if (statusCode !== 200) {
@@ -209,14 +230,14 @@ Item {
           : statusCode === 401 || statusCode === 403 ? (token ? "Homepage MCP authentication failed." : "Homepage MCP requires a token.")
           : statusCode >= 300 && statusCode < 400 ? "Homepage MCP redirects were rejected."
           : "Homepage MCP returned HTTP " + statusCode + ".";
-        callback({ ok: false, httpStatus: statusCode, error: msg });
+        finish({ ok: false, httpStatus: statusCode, error: msg });
         return;
       }
       if (contentType !== "application/json" && !contentType.endsWith("+json")) {
-        callback({ ok: false, httpStatus: statusCode, error: "Homepage MCP returned a non-JSON response." });
+        finish({ ok: false, httpStatus: statusCode, error: "Homepage MCP returned a non-JSON response." });
         return;
       }
-      callback({ ok: true, httpStatus: statusCode, body: responseBody });
+      finish({ ok: true, httpStatus: statusCode, body: responseBody });
     };
     const id = ++_requestId;
     if (!transport.start(id, {
@@ -230,8 +251,9 @@ Item {
     })) {
       const handler = _requestCallback;
       _requestCallback = null;
+      _requestCancelCallback = null;
       if (handler) handler(id, -1, 0, "", "", "busy", "An MCP request is already running.");
-    }
+    } else requestStarted = true;
   }
 
   function handleTransportCompleted(requestId, exitCode, httpStatus, contentType, body, errorKind, errorMessage) {
@@ -259,8 +281,8 @@ Item {
     request(cycle, _token, requestBody, function(result) {
       if (!result.ok) { callback(result); return; }
       const parsed = Mcp.parseRpcResponse(result.body, id);
-      if (!parsed.ok) { callback({ ok: false, httpStatus: 200, error: parsed.error }); return; }
-      callback({ ok: true, httpStatus: 200, result: parsed.result, body: result.body, id });
+      if (!parsed.ok) { callback({ ok: false, httpStatus: 200, error: parsed.error, requestStarted: result.requestStarted }); return; }
+      callback({ ok: true, httpStatus: 200, result: parsed.result, body: result.body, id, requestStarted: result.requestStarted });
     });
   }
 

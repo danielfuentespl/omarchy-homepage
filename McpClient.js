@@ -79,6 +79,15 @@ function makeToolCall(id, name, args) {
   return rpcRequest(id, "tools/call", { name, arguments: args || {} });
 }
 
+function possibleWriteFailure(result) {
+  const failure = { ok: false, error: "Homepage may have changed the configuration." };
+  if (result && typeof result === "object") {
+    Object.keys(result).forEach(key => { failure[key] = result[key]; });
+  }
+  failure.writeMayHaveChanged = true;
+  return failure;
+}
+
 function writeAndVerifyServicesYaml(callTool, content, callback) {
   callTool("validate_config_file", { file: "services.yaml", content }, function(validated) {
     if (!validated.ok) { callback(validated); return; }
@@ -88,7 +97,10 @@ function writeAndVerifyServicesYaml(callTool, content, callback) {
       return;
     }
     callTool("write_config_file", { file: "services.yaml", content }, function(written) {
-      if (!written.ok) { callback(written); return; }
+      if (!written.ok) {
+        callback(written.requestStarted ? possibleWriteFailure(written) : written);
+        return;
+      }
       const writeText = textFromToolResult(written.result);
       let confirmation;
       try { confirmation = writeText.ok ? JSON.parse(writeText.text) : null; } catch (_) { confirmation = null; }
@@ -109,15 +121,21 @@ function writeAndVerifyServicesYaml(callTool, content, callback) {
 
 function addAndVerifyService(callTool, args, callback) {
   callTool("add_service", args, function(response) {
-    if (!response.ok) { callback(response); return; }
+    if (!response.ok) {
+      callback(response.requestStarted ? possibleWriteFailure(response) : response);
+      return;
+    }
     const added = parseAddService(response.result);
-    if (!added.ok) { callback(added); return; }
+    if (!added.ok) {
+      callback(response.requestStarted ? possibleWriteFailure(added) : added);
+      return;
+    }
     callTool("read_config_file", { file: "services.yaml" }, function(readback) {
-      if (!readback.ok) { callback(readback); return; }
+      if (!readback.ok) { callback(possibleWriteFailure(readback)); return; }
       const actual = textFromToolResult(readback.result);
       callback(actual.ok && actual.text === added.content
         ? { ok: true, message: "Service added and verified by read-back." }
-        : { ok: false, error: actual.ok ? "Service add read-back did not match the write." : actual.error });
+        : { ok: false, error: actual.ok ? "Service add read-back did not match the write." : actual.error, writeMayHaveChanged: true });
     });
   });
 }
@@ -125,5 +143,5 @@ function addAndVerifyService(callTool, args, callback) {
 if (typeof module !== "undefined") {
   module.exports = { rpcRequest, parseRpcResponse, textFromToolResult, parseTools,
     parseWritableConfigFiles, parseValidation, parseAddService, makeToolCall,
-    writeAndVerifyServicesYaml, addAndVerifyService };
+    writeAndVerifyServicesYaml, addAndVerifyService, possibleWriteFailure };
 }
