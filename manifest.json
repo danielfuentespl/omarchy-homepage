@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "id": "com.blogvirtualizado.omaops.homepage",
+  "name": "OmaHomepage",
+  "description": "Native Omarchy bar client for browsing and managing gethomepage/Homepage services.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": "BlogVirtualizado / OmaOps",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "category": "System",
+    "displayName": "OmaHomepage",
+    "description": "Browse and manage services from a Homepage dashboard.",
+    "aliases": ["homepage", "homelab", "services", "dashboard", "omaops"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "baseUrl": "",
+      "refreshIntervalSec": 60,
+      "requestTimeoutMs": 8000,
+      "staleAfterSec": 300,
+      "caCertPath": "",
+      "secretId": "default",
+      "editingEnabled": false,
+      "mcpPath": "/api/mcp"
+    },
+    "schema": [
+      {
+      "key": "baseUrl",
+      "type": "string",
+      "label": "Homepage base URL",
+      "description": "Your Homepage address, for example https://homepage.example.com. No default address is set.",
+      "defaultValue": ""
+      },
+      {
+      "key": "refreshIntervalSec",
+      "type": "integer",
+      "label": "Refresh interval (seconds)",
+      "defaultValue": 60,
+      "min": 30,
+      "max": 3600
+      },
+      {
+      "key": "requestTimeoutMs",
+      "type": "integer",
+      "label": "Request timeout (milliseconds)",
+      "defaultValue": 8000,
+      "min": 1000,
+      "max": 30000,
+      "step": 1000
+      },
+      {
+      "key": "staleAfterSec",
+      "type": "integer",
+      "label": "Mark cached data stale after (seconds)",
+      "defaultValue": 300,
+      "min": 60,
+      "max": 86400
+      },
+      {
+      "key": "caCertPath",
+      "type": "string",
+      "label": "Optional custom CA certificate (PEM)",
+      "defaultValue": ""
+      },
+      {
+      "key": "secretId",
+      "type": "string",
+      "label": "Secret Service token ID",
+      "defaultValue": "default"
+      },
+      {
+      "key": "editingEnabled",
+      "type": "boolean",
+      "label": "Enable Homepage configuration editing",
+      "description": "Allows this panel to call Homepage MCP write tools after you also enable writes in Homepage.",
+      "defaultValue": false
+      },
+      {
+      "key": "mcpPath",
+      "type": "string",
+      "label": "Homepage MCP path",
+      "defaultValue": "/api/mcp"
+      }
+    ],
+    "disclaimer": "Independent project. Not affiliated with, sponsored by, or endorsed by Homepage or Omarchy. Homepage's MCP token can access and modify more configuration than services.yaml."
+  }
+}
