@@ -1,0 +1,40 @@
+{
+  "baseUrl": "https://homepage.example.internal",
+  "certificate": {
+    "kind": "PRIVATE_CA_REQUIRED",
+    "host": "homepage.example.internal",
+    "subject": "CN=homepage.example.internal",
+    "issuer": "CN=Example Homelab CA",
+    "sans": ["DNS:homepage.example.internal"],
+    "validFrom": "Sep 1 00:00:00 2026 GMT",
+    "validUntil": "Sep 1 00:00:00 2027 GMT",
+    "fingerprint": "10:20:30:40:50:60:70:80:90:A0:B0:C0:D0:E0:F0:01:12:23:34:45:56:67:78:89:9A:AB:BC:CD:DE:EF:F0:0F"
+  },
+  "groups": [
+    {
+      "name": "Infrastructure",
+      "services": [
+        {"name": "Proxmox", "href": "https://proxmox.example.internal", "description": "Virtualization host"},
+        {"name": "Grafana", "href": "https://grafana.example.internal", "description": "Metrics dashboard"},
+        {"name": "Pi-hole", "href": "https://pihole.example.internal", "description": "Network filtering"}
+      ],
+      "groups": []
+    },
+    {
+      "name": "Storage",
+      "services": [
+        {"name": "NAS", "href": "https://nas.example.internal", "description": "Shared storage"},
+        {"name": "Backup Server", "href": "https://backup.example.internal", "description": "Backup console"}
+      ],
+      "groups": []
+    },
+    {
+      "name": "Docker",
+      "services": [
+        {"name": "Komodo", "href": "https://komodo.example.internal", "description": "Container management"},
+        {"name": "Dozzle", "href": "https://dozzle.example.internal", "description": "Container logs"}
+      ],
+      "groups": []
+    }
+  ]
+}

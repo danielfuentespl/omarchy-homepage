@@ -35,6 +35,24 @@ Once the repository is hosted, the normal Git-managed install is `omarchy plugin
 
 Set the Homepage address in Omarchy's plugin settings or in the panel's **Configure** form. Use an HTTP(S) address, optionally with a safe path; credentials, query strings and fragments are rejected. **Open Homepage** uses this address. Homepage documents its `base` setting as the document base URL; its current UI calls `/api/services` with a root-relative path, so OmaHomepage addresses the services and MCP APIs at the URL origin (`/api/services` and the configured `mcpPath`). A reverse proxy must route those API paths as Homepage expects; the plugin does not assume the document path is an API prefix. HTTPS certificate checks remain on. In **Configure Homepage**, use **Test connection** to check system trust and inspect a presented certificate. For an untrusted but hostname-valid certificate, **Trust this certificate** confirms and trusts only that exact public leaf; OmaHomepage first tests a real `/api/services` request with curl and keeps the trust only if TLS succeeds. A renewed leaf requires another confirmation. **Import CA certificate** remains available for a public PEM CA after validating the live server chain and hostname; it continues to trust certificates issued by that CA. Both trust methods are scoped to the exact Homepage origin and stored in a private directory under `~/.config/omaops/homepage/trust/`. No homelab address is built in.
 
+## Screenshots
+
+### Private CA detected
+
+![Fictional private CA detected by OmaHomepage](docs/screenshots/tls-certificate-untrusted.png)
+
+### Inspect and explicitly trust the certificate
+
+![Fictional certificate details and trust options](docs/screenshots/tls-trust-options.png)
+
+### Confirm the certificate fingerprint
+
+![Fictional certificate fingerprint confirmation](docs/screenshots/tls-trust-confirmation.png)
+
+### Connected to Homepage
+
+![OmaHomepage online with fictional groups and services](docs/screenshots/homepage-online-services.png)
+
 You can also configure the bar widget from a terminal:
 
 ```sh
