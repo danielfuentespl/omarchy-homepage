@@ -28,7 +28,6 @@
       "tlsTrustOrigin": "",
       "tlsTrustFingerprint": "",
       "secretId": "default",
-      "editingEnabled": false,
       "mcpPath": "/api/mcp"
     },
     "schema": [
@@ -96,19 +95,12 @@
       "defaultValue": "default"
       },
       {
-      "key": "editingEnabled",
-      "type": "boolean",
-      "label": "Enable Homepage configuration editing",
-      "description": "Allows this panel to call Homepage MCP write tools after you also enable writes in Homepage.",
-      "defaultValue": false
-      },
-      {
       "key": "mcpPath",
       "type": "string",
       "label": "Homepage MCP path",
       "defaultValue": "/api/mcp"
       }
     ],
-    "disclaimer": "Independent project. Not affiliated with, sponsored by, or endorsed by Homepage or Omarchy. Homepage's MCP token can access and modify more configuration than services.yaml."
+    "disclaimer": "Independent project. Not affiliated with, sponsored by, or endorsed by Homepage or Omarchy. Homepage's MCP token can read configured service credentials. OmaHomepage MCP is read-only in this phase."
   }
 }

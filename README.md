@@ -1,6 +1,6 @@
 # OmaHomepage
 
-OmaHomepage is an independent native Omarchy/Quickshell plugin for browsing services from a gethomepage/Homepage dashboard. It includes a bar widget and a service that polls Homepage's `GET /api/services`, lets you search and open service links, and can optionally add a service or edit `services.yaml` through Homepage's MCP API.
+OmaHomepage is an independent native Omarchy/Quickshell plugin for browsing services from a gethomepage/Homepage dashboard. It includes a bar widget and a service that polls Homepage's `GET /api/services`, lets you search and open service links, and can optionally inspect MCP capabilities and view `services.yaml` through Homepage's read-only MCP API.
 
 ![OmaHomepage preview using fictional service data](docs/preview.png)
 
@@ -11,7 +11,7 @@ Every listed service is marked `UNKNOWN`: Homepage's service API describes confi
 - Omarchy with native plugin support (Quickshell)
 - Homepage with `GET /api/services` enabled
 - `curl` 8.4 or newer available in `/usr/bin` or `/bin` (the response-size cap must apply to streaming responses)
-- For optional MCP editing: Homepage MCP enabled, a user-created MCP token, `secret-tool`, and a Secret Service provider
+- For optional MCP read-only access: Homepage MCP enabled, a user-created MCP token, `secret-tool`, and a Secret Service provider
 
 ## Install and configure
 
@@ -61,32 +61,29 @@ omarchy bar set com.blogvirtualizado.omaops.homepage baseUrl "https://homepage.e
 
 The panel refreshes `/api/services`, filters by group/name/description and opens safe HTTP(S) links through the desktop. The API connection state says whether Homepage replied; each service status stays `UNKNOWN`.
 
-If Homepage has `HOMEPAGE_AUTH_ENABLED=true`, `/api/services` requires the Homepage browser session. The MCP bearer token does not authorize this API endpoint, so the service list may show **AUTH REQUIRED** even when MCP editing works. This release does not ask for or persist a Homepage session cookie.
+If Homepage has `HOMEPAGE_AUTH_ENABLED=true`, `/api/services` requires the Homepage browser session. The MCP bearer token does not authorize this API endpoint, so the service list may show **AUTH REQUIRED** even when MCP is authenticated. This release does not ask for or persist a Homepage session cookie.
 
-## Optional MCP editing
+## Optional MCP read-only access
 
-Homepage MCP is opt-in. Set `HOMEPAGE_MCP_ENABLED=true` in Homepage and configure its MCP token as described in the [Homepage MCP documentation](https://gethomepage.dev/configs/mcp/). For writes, Homepage must also have `HOMEPAGE_MCP_ALLOW_WRITE=true`. In Omarchy plugin settings, explicitly enable **Homepage configuration editing**. The plugin does not contact MCP or Secret Service while this setting is off.
-
-Store the token locally without putting it in shell history, arguments, or plugin settings:
+MCP is optional: browsing, searching, and opening Homepage services use `/api/services` and continue to work when MCP is disabled or unavailable. Homepage MCP requires Homepage v2.0.0 or newer; OmaHomepage's MCP integration has been validated with Homepage v2.4.0. If `/api/mcp` returns 404, OmaHomepage reports **MCP UNAVAILABLE** while keeping normal Homepage navigation available. To use this read-only integration, configure `HOMEPAGE_MCP_ENABLED=true` in Homepage, provide a token supported by Homepage, and keep `HOMEPAGE_MCP_ALLOW_WRITE` unset or `false`. OmaHomepage keeps MCP writes disabled by default. It uses the configured HTTPS origin plus `mcpPath`; it never follows redirects or sends the token over HTTP. It stores the token in Secret Service under `application=omaops-homepage` and `instance=<secretId>`. The helper accepts the token through a no-echo prompt:
 
 ```sh
 ./scripts/store-secret default
 ```
 
-MCP is blocked unless the configured base address uses HTTPS; the token is never sent to an HTTP endpoint. The panel uses Secret Service attributes `application=omaops-homepage` and `instance=default`. Change `secretId` in plugin settings and pass the same ID to the script when storing another token. Remove a token with:
+After authentication, OmaHomepage requests `tools/list` and reports the advertised read/write capabilities while remaining **MCP READ ONLY**. It can call only `read_config_file` for `services.yaml`; other files and all write tools are rejected locally. Choose **View services.yaml** to review that potentially sensitive file; OmaHomepage asks first, displays the exact content locally, and clears it from panel memory when the view closes. It does not log, cache or copy the file.
+
+To remove the stored token:
 
 ```sh
 secret-tool clear application omaops-homepage instance default
 ```
 
-After opt-in, the panel checks Homepage's MCP capabilities. **+ Add service** adds a validated HTTP(S) link, confirms the change, then verifies the `services.yaml` result. **Edit services.yaml** reads that file only after you click the button; **Validate & Save** validates first, asks for explicit confirmation, writes, and reads the content back. If a write succeeds but read-back cannot verify it, the editor offers an explicitly confirmed restore using the last verified in-memory version. Concurrent Homepage edits may be overwritten by that restore, so review the warning before confirming. The editor keeps its draft in panel memory only; it does not write a local cache or clipboard.
-
 Structured editing of an existing individual service is planned for a later release. Raw YAML editing is used because parsing and reserializing the whole file could change comments, ordering, anchors, or formatting. The Homepage API does not reliably identify whether each returned service came from `services.yaml` or Docker discovery. OmaHomepage therefore does not claim Docker provenance or offer per-row edit controls; Docker `server`/`container` hints may be shown when the API returns them.
 
 ### MCP token scope
 
-Treat the Homepage MCP token as a broad administrative credential. Homepage documents that the token can read configured credentials and, when write access is enabled, can modify more than `services.yaml` (including `custom.js`). OmaHomepage restricts its own buttons to a small allowlist of MCP tools and targets the service file, but it cannot reduce the authority granted by Homepage to the token itself. Use a dedicated token, keep editing off when not needed, and secure Homepage accordingly. Do not enable Homepage MCP writes if you do not accept this scope.
-
+Treat the Homepage MCP token as a sensitive credential. Homepage may expose configured credentials through MCP and may advertise write tools, but this OmaHomepage phase never invokes writes. Keep `HOMEPAGE_MCP_ALLOW_WRITE` unset or false, and protect the token and Homepage instance.
 ## Data and security
 
 - curl uses `-q --config -`; generated options and the token are sent through stdin, not command-line arguments or environment variables.

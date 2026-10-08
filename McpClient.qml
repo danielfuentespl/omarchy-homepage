@@ -10,6 +10,8 @@ Item {
   property string status: "MCP UNAVAILABLE"
   property string message: ""
   property bool writeEnabled: false
+  property bool serverWriteAvailable: false
+  property bool readEnabled: false
   property bool authenticated: false
   property bool operationBusy: false
   readonly property bool busy: operationBusy || _checking
@@ -25,7 +27,7 @@ Item {
   property bool _checking: false
 
   function configurationKey(spec) {
-    return JSON.stringify([spec.baseUrl, spec.secretId, spec.caCertPath, spec.mcpPath, spec.editingEnabled]);
+    return Mcp.configurationKey(spec);
   }
 
   function cancel() {
@@ -55,6 +57,8 @@ Item {
     status = "MCP UNAVAILABLE";
     message = "";
     writeEnabled = false;
+    serverWriteAvailable = false;
+    readEnabled = false;
     authenticated = false;
     operationBusy = false;
     tools = [];
@@ -66,6 +70,11 @@ Item {
 
   function check(spec) {
     cancel();
+    writeEnabled = false;
+    serverWriteAvailable = false;
+    readEnabled = false;
+    authenticated = false;
+    tools = [];
     _configKey = configurationKey(spec);
     const generation = _generation;
     const url = Model.normalizeBaseUrl(spec.baseUrl);
@@ -81,21 +90,16 @@ Item {
       key: _configKey,
       baseUrl: url.value,
       origin: Model.originUrl(url.value),
+      serviceGeneration: spec.generation,
+      tlsTrustMode: spec.tlsTrustMode || "system",
+      tlsTrustOrigin: spec.tlsTrustOrigin || "",
+      tlsTrustFingerprint: spec.tlsTrustFingerprint || "",
       mcpPath,
       secretId: spec.secretId || "default",
       caCertPath: spec.caCertPath || "",
-      editingEnabled: spec.editingEnabled === true,
       timeoutSec: Math.max(1, Math.ceil(Number(spec.requestTimeoutMs || 8000) / 1000))
     };
     _checking = true;
-    if (!_cycle.editingEnabled) {
-      _checking = false;
-      status = "MCP READ ONLY";
-      message = "Editing is disabled in OmaHomepage; MCP is not contacted until you opt in.";
-      writeEnabled = false;
-      authenticated = false;
-      return;
-    }
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(_cycle.secretId)) {
       _checking = false;
       status = "MCP AUTHENTICATION FAILED";
@@ -167,32 +171,24 @@ Item {
       if (!toolsResult.ok) { fail(cycle, 200, toolsResult.error, Boolean(token)); return; }
       tools = toolsResult.names;
       authenticated = Boolean(token);
+      readEnabled = Mcp.supportsTool(tools, "read_config_file");
+      serverWriteAvailable = Mcp.supportsTool(tools, "add_service") || Mcp.supportsTool(tools, "write_config_file");
+      // This phase never enables writes, even if Homepage advertises write tools.
+      writeEnabled = false;
       if (!authenticated) {
         status = "MCP AUTH REQUIRED";
         message = "Store the Homepage MCP token in Secret Service to use MCP.";
-        writeEnabled = false;
         _checking = false;
         return;
       }
-      if (tools.indexOf("list_config_files") === -1) {
-        status = "MCP READ ONLY";
-        message = "Homepage MCP does not expose config-file capability information.";
-        writeEnabled = false;
-        _checking = false;
-        return;
-      }
-      callRawTool(cycle, "list_config_files", {}, function(configResult) {
-        if (!configResult.ok) { fail(cycle, configResult.httpStatus, configResult.error, true); return; }
-        const rpc = Mcp.parseRpcResponse(configResult.body, configResult.id);
-        const access = rpc.ok ? Mcp.parseWritableConfigFiles(rpc.result) : rpc;
-        if (!access.ok) { fail(cycle, 200, access.error, true); return; }
-        writeEnabled = access.writable;
-        status = writeEnabled ? "MCP WRITE ENABLED" : "MCP READ ONLY";
-        message = writeEnabled
-          ? "Homepage MCP allows writes. Use editing controls only after enabling them in OmaHomepage settings."
-          : "Homepage MCP is authenticated and read-only.";
-        _checking = false;
-      });
+      status = "MCP READ ONLY";
+      const advertised = Mcp.capabilitySummary(tools);
+      message = (readEnabled
+        ? "Authenticated. Only services.yaml can be read. "
+        : "Homepage MCP does not advertise read_config_file. ")
+        + "Detected: " + (advertised.length ? advertised.join(", ") : "no supported tools")
+        + ". OmaHomepage remains read-only.";
+      _checking = false;
     });
   }
 
@@ -266,6 +262,8 @@ Item {
     if (!current(cycle)) return;
     _checking = false;
     writeEnabled = false;
+    readEnabled = false;
+    serverWriteAvailable = false;
     if (httpStatus === 404) status = "MCP UNAVAILABLE";
     else if (httpStatus === 401 || httpStatus === 403) status = hadToken ? "MCP AUTHENTICATION FAILED" : "MCP AUTH REQUIRED";
     else if (error && error.indexOf("TLS") !== -1) status = "MCP UNAVAILABLE";
@@ -274,10 +272,15 @@ Item {
   }
 
   function callRawTool(cycle, name, args, callback) {
+    if (name !== "read_config_file" || !args || args.file !== "services.yaml" || Object.keys(args).length !== 1) {
+      callback({ ok: false, error: "Only read_config_file for services.yaml is allowed." }); return;
+    }
     if (!current(cycle) || !_token) { callback({ ok: false, error: "Homepage MCP authentication is required." }); return; }
-    if (tools.indexOf(name) === -1) { callback({ ok: false, error: "Homepage does not support the requested MCP tool." }); return; }
+    if (!Mcp.supportsTool(tools, "read_config_file")) { callback({ ok: false, error: "Homepage does not advertise read_config_file." }); return; }
     const id = ++_requestId;
-    const requestBody = JSON.stringify(Mcp.makeToolCall(id, name, args));
+    const toolRequest = Mcp.makeToolCall(id, name, args);
+    if (!toolRequest) { callback({ ok: false, error: "Only services.yaml can be read." }); return; }
+    const requestBody = JSON.stringify(toolRequest);
     request(cycle, _token, requestBody, function(result) {
       if (!result.ok) { callback(result); return; }
       const parsed = Mcp.parseRpcResponse(result.body, id);
@@ -286,12 +289,16 @@ Item {
     });
   }
 
+  function currentReadCycle() {
+    return _cycle && current(_cycle) && readEnabled && _token;
+  }
+
   function currentEditingCycle() {
-    return _cycle && current(_cycle) && _cycle.editingEnabled && writeEnabled && _token;
+    return false;
   }
 
   function readServicesYaml(callback) {
-    if (!currentEditingCycle()) { callback({ ok: false, error: "Enable editing and authenticated Homepage MCP first." }); return; }
+    if (!currentReadCycle()) { callback({ ok: false, error: "Authenticated read-only Homepage MCP is required." }); return; }
     operationBusy = true;
     callRawTool(_cycle, "read_config_file", { file: "services.yaml" }, function(response) {
       if (!response.ok) { operationBusy = false; callback(response); return; }

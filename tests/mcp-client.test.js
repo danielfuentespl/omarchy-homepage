@@ -9,15 +9,48 @@ test("builds and validates JSON-RPC requests and exact response identities", () 
   assert.equal(Mcp.parseRpcResponse('{"jsonrpc":"2.0","id":3,"result":{"tools":[]}}', 3).ok, true);
   assert.equal(Mcp.parseRpcResponse('{"jsonrpc":"2.0","id":4,"result":{}}', 3).ok, false);
   assert.equal(Mcp.parseRpcResponse('{bad', 3).ok, false);
-  assert.equal(Mcp.parseRpcResponse({ jsonrpc: "2.0", id: 3, error: { code: -32601, message: "Missing" } }, 3).error, "Missing");
+  assert.equal(Mcp.parseRpcResponse({ jsonrpc: "2.0", id: 3, error: { code: -32601, message: "secret YAML content" } }, 3).error,
+    "MCP server rejected the requested operation.");
 });
 
-test("only exposes allow-listed Homepage tools", () => {
-  assert.equal(Mcp.makeToolCall(1, "read_config_file", { file: "services.yaml" }).method, "tools/call");
-  assert.equal(Mcp.makeToolCall(1, "execute_shell", {}), null);
-  assert.deepEqual(Mcp.parseTools({ tools: [{ name: "add_service" }, { name: "write_config_file" }] }), {
-    ok: true, names: ["add_service", "write_config_file"]
+test("read-only tool allowlist permits only services.yaml and rejects all other calls locally", () => {
+  assert.deepEqual(Mcp.makeToolCall(1, "read_config_file", { file: "services.yaml" }), {
+    jsonrpc: "2.0", id: 1, method: "tools/call",
+    params: { name: "read_config_file", arguments: { file: "services.yaml" } }
   });
+  for (const file of ["settings.yaml", "widgets.yaml", "bookmarks.yaml", "docker.yaml", "kubernetes.yaml",
+    "proxmox.yaml", "custom.js", "custom.css", "../services.yaml"]) {
+    assert.equal(Mcp.makeToolCall(2, "read_config_file", { file }), null);
+  }
+  assert.equal(Mcp.makeToolCall(2, "read_config_file", { file: "services.yaml", content: "ignored" }), null);
+  for (const name of ["list_config_files", "validate_config_file", "write_config_file", "add_service", "add_info_widget", "homepage_docs", "execute_shell"]) {
+    assert.equal(Mcp.makeToolCall(3, name, {}), null, name + " must not be callable in read-only phase");
+  }
+  assert.deepEqual(Mcp.parseTools({ tools: [{ name: "add_service" }, { name: "write_config_file" }, { name: "read_config_file" }] }), {
+    ok: true, names: ["add_service", "write_config_file", "read_config_file"]
+  });
+  assert.deepEqual(Mcp.capabilitySummary(["read_config_file", "validate_config_file", "add_service", "write_config_file"]),
+    ["read_config_file", "validate_config_file", "add_service", "write_config_file"]);
+  assert.equal(Mcp.supportsTool(["read_config_file"], "read_config_file"), true);
+  assert.equal(Mcp.supportsTool(["read_config_file"], "write_config_file"), false);
+});
+
+test("MCP configuration identity changes for generation, origin, token ID and every TLS trust mode", () => {
+  const base = { generation: 1, baseUrl: "https://homepage.example", origin: "https://homepage.example",
+    secretId: "default", caCertPath: "", tlsTrustMode: "system", tlsTrustOrigin: "", tlsTrustFingerprint: "", mcpPath: "/api/mcp" };
+  const key = Mcp.configurationKey(base);
+  for (const [name, value] of Object.entries({ generation: 2, origin: "https://other.example", secretId: "alternate",
+    caCertPath: "/tmp/example-ca.pem", tlsTrustMode: "private-ca", tlsTrustOrigin: "https://homepage.example",
+    tlsTrustFingerprint: "aa:bb", mcpPath: "/custom/mcp" })) {
+    assert.notEqual(Mcp.configurationKey({ ...base, [name]: value }), key, name + " must invalidate an MCP session");
+  }
+});
+
+test("MCP error tool content is never copied into an error message", () => {
+  const secretYaml = "apiKey: super-secret-value";
+  const result = Mcp.textFromToolResult({ isError: true, content: [{ type: "text", text: secretYaml }] });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.includes(secretYaml), false);
 });
 
 test("detects read-only versus writable services.yaml capability", () => {
@@ -31,7 +64,8 @@ test("detects read-only versus writable services.yaml capability", () => {
 test("parses YAML validation errors and valid responses", () => {
   const invalid = { isError: true, content: [{ type: "text", text: JSON.stringify({ valid: false, error: "bad indentation", mark: { line: 3, column: 4 } }) }] };
   const valid = { content: [{ type: "text", text: JSON.stringify({ valid: true }) }] };
-  assert.deepEqual(Mcp.parseValidation(invalid), { ok: true, valid: false, error: "bad indentation", mark: { line: 3, column: 4 } });
+  assert.deepEqual(Mcp.parseValidation(invalid), { ok: true, valid: false,
+    error: "Homepage rejected the requested MCP operation.", mark: null });
   assert.deepEqual(Mcp.parseValidation(valid), { ok: true, valid: true, error: "", mark: null });
 });
 

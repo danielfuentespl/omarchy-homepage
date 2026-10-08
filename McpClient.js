@@ -15,7 +15,7 @@ function parseRpcResponse(payload, expectedId) {
     return { ok: false, error: "MCP returned an invalid JSON-RPC response." };
   }
   if (value.error && typeof value.error === "object") {
-    return { ok: false, code: value.error.code, error: typeof value.error.message === "string" ? value.error.message : "MCP request failed." };
+    return { ok: false, code: value.error.code, error: "MCP server rejected the requested operation." };
   }
   if (!Object.prototype.hasOwnProperty.call(value, "result")) return { ok: false, error: "MCP response has no result." };
   return { ok: true, result: value.result };
@@ -24,7 +24,7 @@ function parseRpcResponse(payload, expectedId) {
 function textFromToolResult(result) {
   if (!result || typeof result !== "object" || !Array.isArray(result.content)) return { ok: false, error: "MCP tool returned no content." };
   const text = result.content.filter(item => item && item.type === "text" && typeof item.text === "string").map(item => item.text).join("\n");
-  if (result.isError === true) return { ok: false, error: text || "Homepage rejected the MCP operation." };
+  if (result.isError === true) return { ok: false, error: "Homepage rejected the requested MCP operation." };
   return { ok: true, text };
 }
 
@@ -74,9 +74,22 @@ function parseAddService(toolResult) {
 }
 
 function makeToolCall(id, name, args) {
-  const allowed = ["list_config_files", "read_config_file", "validate_config_file", "write_config_file", "add_service"];
-  if (allowed.indexOf(name) === -1) return null;
-  return rpcRequest(id, "tools/call", { name, arguments: args || {} });
+  if (name !== "read_config_file" || !args || args.file !== "services.yaml" || Object.keys(args).length !== 1) return null;
+  return rpcRequest(id, "tools/call", { name, arguments: { file: "services.yaml" } });
+}
+
+function supportsTool(names, name) {
+  return Array.isArray(names) && names.indexOf(name) !== -1;
+}
+
+function capabilitySummary(names) {
+  const supported = ["read_config_file", "validate_config_file", "add_service", "write_config_file"];
+  return supported.filter(name => supportsTool(names, name));
+}
+
+function configurationKey(spec) {
+  return JSON.stringify([spec.generation, spec.baseUrl, spec.origin, spec.secretId, spec.caCertPath,
+    spec.tlsTrustMode, spec.tlsTrustOrigin, spec.tlsTrustFingerprint, spec.mcpPath]);
 }
 
 function possibleWriteFailure(result) {
@@ -141,7 +154,7 @@ function addAndVerifyService(callTool, args, callback) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { rpcRequest, parseRpcResponse, textFromToolResult, parseTools,
+  module.exports = { rpcRequest, parseRpcResponse, textFromToolResult, parseTools, supportsTool, capabilitySummary, configurationKey,
     parseWritableConfigFiles, parseValidation, parseAddService, makeToolCall,
     writeAndVerifyServicesYaml, addAndVerifyService, possibleWriteFailure };
 }

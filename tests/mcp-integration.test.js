@@ -113,40 +113,27 @@ function fixtureToolCaller(fixture) {
   };
 }
 
-test("in-memory Homepage fixture verifies the complete MCP write sequence and failure guards", async () => {
+test("in-memory Homepage MCP read-only phase lists tools and reads services.yaml without any write call", async () => {
   const fixture = createHomepageServer({ token });
   const listed = await fixtureRpc(fixture, "tools/list", {}, 1);
-  assert.equal(Mcp.parseTools(listed.result).names.includes("write_config_file"), true);
+  const tools = Mcp.parseTools(listed.result);
+  assert.equal(tools.ok, true);
+  assert.ok(tools.names.includes("read_config_file"));
+  assert.ok(tools.names.includes("validate_config_file"));
+  assert.ok(tools.names.includes("add_service"));
+  assert.ok(tools.names.includes("write_config_file"));
 
-  const callTool = fixtureToolCaller(fixture);
-  const invokeWorkflow = (workflow, ...args) => new Promise(resolve => workflow(callTool, ...args, resolve));
-  const invalid = await invokeWorkflow(Mcp.writeAndVerifyServicesYaml, "INVALID_YAML\n");
-  assert.equal(invalid.ok, false);
-  assert.equal(fixture.state.writeCount, 0, "invalid YAML must not reach write_config_file");
-
-  const yaml = "- Media:\n    - Jellyfin:\n        href: https://media.example.test\n";
-  const saved = await invokeWorkflow(Mcp.writeAndVerifyServicesYaml, yaml);
-  assert.equal(saved.ok, true, saved.error);
-  assert.equal(fixture.state.yaml, yaml);
-  assert.deepEqual(fixture.state.calls.map(call => call.name), [
-    "", "validate_config_file", "validate_config_file", "write_config_file", "read_config_file"
-  ]);
-
-  const add = await invokeWorkflow(Mcp.addAndVerifyService, {
-    group: "Media", name: "Jellyfin", service: { href: "https://media.example.test" }
-  });
-  assert.equal(add.ok, true, add.error);
-  assert.deepEqual(fixture.state.calls.slice(-2).map(call => call.name), ["add_service", "read_config_file"]);
-
-  const broken = createHomepageServer({ token, corruptReadback: true });
-  const mismatch = await new Promise(resolve => Mcp.writeAndVerifyServicesYaml(fixtureToolCaller(broken), yaml, resolve));
-  assert.equal(mismatch.ok, false);
-  assert.equal(mismatch.writeMayHaveChanged, true);
-  assert.equal(broken.state.writeCount, 1, "mismatched read-back must not trigger another write");
-  assert.deepEqual(broken.state.calls.map(call => call.name), ["validate_config_file", "write_config_file", "read_config_file"]);
+  const toolRequest = Mcp.makeToolCall(2, "read_config_file", { file: "services.yaml" });
+  assert.ok(toolRequest);
+  const rpc = await fixtureRpc(fixture, toolRequest.method, toolRequest.params, 2);
+  assert.match(Mcp.textFromToolResult(rpc.result).text, /Proxmox/);
+  assert.equal(Mcp.makeToolCall(3, "read_config_file", { file: "settings.yaml" }), null);
+  assert.equal(Mcp.makeToolCall(4, "write_config_file", { file: "services.yaml", content: "bad" }), null);
+  assert.deepEqual(fixture.state.calls.map(call => [call.method, call.name]), [["tools/list", ""], ["tools/call", "read_config_file"]]);
+  assert.equal(fixture.state.writeCount, 0);
 });
 
-test("Homepage fixture exercises API, MCP tools, validation, write and read-back over verified TLS", async t => {
+test("Homepage fixture lists capabilities and reads only services.yaml over verified TLS", async t => {
   const cert = certificate(t);
   const fixture = createHomepageServer({ token });
   const endpoint = await listen(t, fixture.server, cert);
@@ -159,61 +146,100 @@ test("Homepage fixture exercises API, MCP tools, validation, write and read-back
   assert.equal(endpointInfo.url, endpoint.base + "/api/services");
   assert.equal(Model.parseServices(api.stdout).services[0].name, "Proxmox");
 
-  const listed = callTool(endpoint.base, cert.caCertPath, "list_config_files", {}, 1);
-  assert.equal(Mcp.parseWritableConfigFiles(listed.result).writable, true);
   const tools = listTools(endpoint.base, cert.caCertPath, 20);
   assert.equal(tools.ok, true);
-  assert.ok(tools.names.includes("validate_config_file"));
-  assert.ok(tools.names.includes("write_config_file"));
+  for (const name of ["read_config_file", "validate_config_file", "add_service", "write_config_file"])
+    assert.ok(tools.names.includes(name));
   const read = callTool(endpoint.base, cert.caCertPath, "read_config_file", { file: "services.yaml" }, 2);
   assert.match(Mcp.textFromToolResult(read.result).text, /Proxmox/);
 
-  const invalidContent = "INVALID_YAML\n";
-  let invalidResult;
-  Mcp.writeAndVerifyServicesYaml(requestVia(endpoint.base, cert.caCertPath), invalidContent, value => { invalidResult = value; });
-  assert.equal(invalidResult.ok, false);
-  assert.match(invalidResult.error, /Invalid YAML fixture/);
-  assert.equal(fixture.state.writeCount, 0, "write must not be sent after failed validation");
-
-  const validContent = "- Media:\n    - Jellyfin:\n        href: https://media.example.test\n";
-  let saved;
-  Mcp.writeAndVerifyServicesYaml(requestVia(endpoint.base, cert.caCertPath), validContent, value => { saved = value; });
-  assert.equal(saved.ok, true, saved.error);
-  assert.equal(fixture.state.yaml, validContent);
-  assert.deepEqual(fixture.state.calls.slice(-3).map(call => call.name), ["validate_config_file", "write_config_file", "read_config_file"]);
-
-  let added;
-  Mcp.addAndVerifyService(requestVia(endpoint.base, cert.caCertPath), {
-    group: "Media", name: "Jellyfin", service: { href: "https://media.example.test" }
-  }, value => { added = value; });
-  assert.equal(added.ok, true, added.error);
-  assert.deepEqual(fixture.state.calls.slice(-2).map(call => call.name), ["add_service", "read_config_file"]);
-
+  const attemptedOtherFile = Mcp.makeToolCall(3, "read_config_file", { file: "widgets.yaml" });
+  const attemptedWrite = Mcp.makeToolCall(4, "write_config_file", { file: "services.yaml", content: "" });
+  assert.equal(attemptedOtherFile, null);
+  assert.equal(attemptedWrite, null);
+  assert.equal(fixture.state.writeCount, 0);
+  assert.deepEqual(fixture.state.calls.map(call => [call.method, call.name]), [
+    ["tools/list", ""], ["tools/call", "read_config_file"]
+  ]);
   assert.ok(fixture.state.authorizedRequests > 0);
   assert.equal(api.config.includes(token), false);
   assert.equal(JSON.stringify(api.argv).includes(token), false);
   assert.equal(JSON.stringify(api.env).includes(token), false);
-  const authenticatedRequest = invoke(endpoint.base, cert.caCertPath, "POST",
-    JSON.stringify(Mcp.makeToolCall(99, "tools/list", {})), 99);
-  assert.equal(authenticatedRequest.config.includes(token), true, "the dummy token is sent only in curl stdin config");
+  const authenticatedRequest = invoke(endpoint.base, cert.caCertPath,
+    "POST", JSON.stringify(Mcp.rpcRequest(99, "tools/list", {})), 99);
+  assert.equal(authenticatedRequest.exitCode, 0);
+  assert.equal(authenticatedRequest.config.includes(token), true, "the fixture token is sent only in curl stdin config");
   assert.equal(JSON.stringify(authenticatedRequest.argv).includes(token), false);
   assert.equal(JSON.stringify(authenticatedRequest.env).includes(token), false);
   assert.equal(authenticatedRequest.stdout.includes(token), false);
   assert.equal(authenticatedRequest.stderr.includes(token), false);
+  for (const file of fs.readdirSync(path.dirname(cert.caCertPath))) {
+    assert.equal(fs.readFileSync(path.join(path.dirname(cert.caCertPath), file), "utf8").includes(token), false);
+  }
 });
 
-test("a mismatched read-back is reported without retrying or issuing another write", async t => {
+
+test("MCP disabled, auth failures, malformed JSON-RPC and missing result are reported without following redirects", async t => {
+  for (const scenario of [
+    { mcpStatus: 401, expected: 401 },
+    { mcpStatus: 403, expected: 403 },
+    { mcpStatus: 404, expected: 404 },
+    { mcpStatus: 500, expected: 500 },
+    { mcpBody: "not-json", malformed: true },
+    { mcpWrongId: true, wrongId: true },
+    { mcpMissingResult: true, missingResult: true }
+  ]) {
+    const cert = certificate(t);
+    const fixture = createHomepageServer(scenario);
+    const endpoint = await listen(t, fixture.server, cert);
+    if (!endpoint) return;
+    const result = invoke(endpoint.base, cert.caCertPath, "POST",
+      JSON.stringify(Mcp.rpcRequest(5, "tools/list", {})), 5, token, 2);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(result.parsed.status, scenario.expected || 200);
+    if (scenario.malformed) assert.equal(Mcp.parseRpcResponse(result.stdout, 5).ok, false);
+    if (scenario.wrongId) assert.equal(Mcp.parseRpcResponse(result.stdout, 5).ok, false);
+    if (scenario.missingResult) assert.match(Mcp.parseRpcResponse(result.stdout, 5).error, /no result/);
+  }
+});
+
+test("MCP rejects every redirect status and never reaches a redirect destination", async t => {
+  for (const code of [301, 302, 303, 307, 308]) {
+    let destinationHits = 0;
+    const fixture = createHomepageServer({ mcpRedirect: code });
+    // Track redirect targets while retaining the fixture's MCP response behavior.
+    const cert = certificate(t);
+    const tlsServer = https.createServer({ key: cert.key, cert: cert.cert }, (request, response) => {
+      if (request.url === "/__omahp_probe") { response.writeHead(204); response.end(); return; }
+      if (request.url === "/mcp-target") destinationHits++;
+      fixture.handleRequest(request, response);
+    });
+    const endpoint = await listen(t, tlsServer, cert);
+    if (!endpoint) return;
+    const result = invoke(endpoint.base, cert.caCertPath, "POST",
+      JSON.stringify(Mcp.rpcRequest(1, "tools/list", {})), 1, token, 2);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(result.parsed.status, code);
+    assert.equal(destinationHits, 0);
+  }
+});
+
+test("MCP timeout is bounded and an invalid bearer token is rejected", async t => {
   const cert = certificate(t);
-  const fixture = createHomepageServer({ token, corruptReadback: true });
+  const fixture = createHomepageServer({ token, mcpDelayMs: 1500 });
   const endpoint = await listen(t, fixture.server, cert);
   if (!endpoint) return;
-  let outcome;
-  Mcp.writeAndVerifyServicesYaml(requestVia(endpoint.base, cert.caCertPath), "- Test:\n    - One:\n", result => { outcome = result; });
-  assert.equal(outcome.ok, false);
-  assert.equal(outcome.writeMayHaveChanged, true);
-  assert.equal(outcome.error, "Read-back did not match the saved content.");
-  assert.equal(fixture.state.writeCount, 1);
-  assert.deepEqual(fixture.state.calls.map(call => call.name), ["validate_config_file", "write_config_file", "read_config_file"]);
+  const timed = invoke(endpoint.base, cert.caCertPath, "POST",
+    JSON.stringify(Mcp.rpcRequest(1, "tools/list", {})), 1, token, 1);
+  assert.equal(timed.exitCode, 28);
+
+  const authFixture = createHomepageServer({ token });
+  const authEndpoint = await listen(t, authFixture.server, cert);
+  if (!authEndpoint) return;
+  const wrong = invoke(authEndpoint.base, cert.caCertPath, "POST",
+    JSON.stringify(Mcp.rpcRequest(2, "tools/list", {})), 2, "wrong-token-value-that-is-definitely-not-valid-000", 2);
+  assert.equal(wrong.exitCode, 0);
+  assert.equal(wrong.parsed.status, 401);
 });
 
 test("Homepage fixture simulates auth failures, server errors, malformed JSON and timeouts", async t => {

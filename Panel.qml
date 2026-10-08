@@ -50,6 +50,9 @@ Ui.Panel {
   property string newServer: ""
   property string newContainer: ""
   property bool yamlEditorOpen: false
+  property bool yamlViewOpen: false
+  property bool yamlViewPromptOpen: false
+  property int yamlViewRequestId: 0
   property string yamlText: ""
   property string yamlOriginalText: ""
   property bool yamlHasOriginal: false
@@ -105,6 +108,9 @@ Ui.Panel {
     property string mcpStatus: "MCP UNAVAILABLE"
     property string mcpMessage: ""
     property bool mcpWriteEnabled: false
+    property bool mcpReadEnabled: false
+    property bool mcpServerWriteAvailable: false
+    property var mcpTools: []
     property bool mcpAuthenticated: false
     property bool mcpBusy: false
     property bool editingEnabled: false
@@ -144,6 +150,7 @@ Ui.Panel {
   }
 
   function close() {
+    closeYamlViewer()
     setCenterHoverRevealSuppressed(false)
     controller.hide()
   }
@@ -489,34 +496,48 @@ Ui.Panel {
     else notice = "This service does not have a safe HTTP(S) link."
   }
 
-  function openYamlEditor() {
-    if (!writeControlsReady) return
-    notice = "Loading services.yaml from Homepage MCP…"
+  function requestYamlView() {
+    if (!service.mcpAuthenticated || !service.mcpReadEnabled || service.mcpBusy) return
+    yamlViewPromptOpen = true
+  }
+
+  function loadYamlView() {
+    if (!yamlViewPromptOpen || !service.mcpAuthenticated || !service.mcpReadEnabled || service.mcpBusy) return
+    yamlViewPromptOpen = false
+    const requestId = ++yamlViewRequestId
+    notice = "Reading services.yaml from Homepage MCP…"
     yamlLoading = true
     service.readServicesYaml(function(result) {
+      if (requestId !== root.yamlViewRequestId) return
       yamlLoading = false
       if (!result.ok) { notice = result.error; return }
       yamlText = result.content
-      yamlOriginalText = result.content
-      yamlHasOriginal = true
+      yamlOriginalText = ""
+      yamlHasOriginal = false
       yamlPendingContent = ""
       restoreAvailable = false
-      yamlEditorOpen = true
-      notice = "Edit services.yaml. OmaHomepage will validate it before saving."
+      yamlEditorOpen = false
+      yamlViewOpen = true
+      notice = ""
     })
   }
 
   function closeYamlEditor() {
-    if (yamlLoading) return
+    yamlViewRequestId++
+    yamlViewPromptOpen = false
     yamlConfirmOpen = false
     yamlPendingContent = ""
     yamlPendingRestore = false
     yamlEditorOpen = false
+    yamlViewOpen = false
+    yamlLoading = false
     yamlText = ""
     yamlOriginalText = ""
     yamlHasOriginal = false
     restoreAvailable = false
   }
+
+  function closeYamlViewer() { closeYamlEditor() }
 
   function saveYaml() {
     if (!writeControlsReady || yamlLoading) return
@@ -646,6 +667,7 @@ Ui.Panel {
     tlsNotice = ""
   }
   onSettingsChanged: {
+    closeYamlViewer()
     const rollingBackLeaf = leafVerifyPending && Model.originUrl(service.baseUrl) !== Model.originUrl(leafVerifyBaseUrl)
     if (rollingBackLeaf)
       cancelLeafVerification("Homepage address changed during verification. The new certificate was removed.")
@@ -718,6 +740,7 @@ Ui.Panel {
       onCloseRequested: {
         if (root.tlsConfirmOpen) { root.tlsConfirmOpen = false; root.tlsConfirmAction = "" }
         else if (root.removeTrustConfirmOpen) root.removeTrustConfirmOpen = false
+        else if (root.yamlViewPromptOpen) root.yamlViewPromptOpen = false
         else if (root.yamlConfirmOpen) root.cancelYamlConfirmation()
         else if (root.addConfirmOpen) root.cancelAddConfirmation()
         else root.close()
@@ -725,6 +748,7 @@ Ui.Panel {
       onReturnRequested: {
         if (root.tlsConfirmOpen) root.confirmCertificateTrust()
         else if (root.removeTrustConfirmOpen) root.removeCustomTrust()
+        else if (root.yamlViewPromptOpen) root.loadYamlView()
         else if (root.yamlConfirmOpen) root.confirmYamlSave()
         else if (root.addConfirmOpen) root.confirmAddService()
       }
@@ -809,9 +833,7 @@ Ui.Panel {
             Layout.fillWidth: true
             Text {
               Layout.fillWidth: true
-              text: root.service.editingEnabled
-                ? root.service.mcpStatus + (root.service.mcpMessage ? " · " + root.service.mcpMessage : "")
-                : "MCP READ ONLY · Enable configuration editing in OmaHomepage plugin settings to opt in."
+              text: root.service.mcpStatus + (root.service.mcpMessage ? " · " + root.service.mcpMessage : "")
               textFormat: Text.PlainText
               wrapMode: Text.Wrap
               color: root.service.mcpStatus === "MCP AUTHENTICATION FAILED" ? root.urgent : root.foreground
@@ -1086,7 +1108,7 @@ Ui.Panel {
 
           Rectangle {
             Layout.fillWidth: true
-            visible: root.yamlEditorOpen
+            visible: root.yamlEditorOpen || root.yamlViewOpen
             implicitHeight: yamlColumn.implicitHeight + Style.space(14)
             radius: Math.min(4, Style.cornerRadius)
             color: root.bar ? root.bar.background : Color.popups.background
@@ -1097,7 +1119,7 @@ Ui.Panel {
               Text { text: "services.yaml"; color: root.foreground; font.pixelSize: Style.font.heading; font.bold: true }
               Text {
                 Layout.fillWidth: true
-                text: "This text stays in memory in the panel. It is not written to local cache, logs or clipboard."
+                text: "This file may contain sensitive values. It is shown locally and is not persisted by OmaHomepage."
                 textFormat: Text.PlainText
                 wrapMode: Text.Wrap
                 color: root.foreground
@@ -1113,12 +1135,12 @@ Ui.Panel {
                   font.family: "monospace"
                   wrapMode: TextEdit.NoWrap
                   selectByMouse: true
-                  readOnly: root.yamlConfirmOpen || root.yamlLoading
+                  readOnly: root.yamlViewOpen || root.yamlConfirmOpen || root.yamlLoading
                 }
               }
               RowLayout {
-                Ui.Button { text: root.yamlLoading ? "Working…" : "Validate & Save"; enabled: root.writeControlsReady && !root.yamlLoading; onClicked: root.saveYaml() }
-                Ui.Button { text: "Restore previous version"; visible: root.restoreAvailable; enabled: root.writeControlsReady && !root.yamlLoading; onClicked: root.beginRestore() }
+                Ui.Button { text: root.yamlLoading ? "Working…" : "Validate & Save"; visible: !root.yamlViewOpen; enabled: root.writeControlsReady && !root.yamlLoading; onClicked: root.saveYaml() }
+                Ui.Button { text: "Restore previous version"; visible: !root.yamlViewOpen && root.restoreAvailable; enabled: root.writeControlsReady && !root.yamlLoading; onClicked: root.beginRestore() }
                 Ui.Button { text: "Close"; enabled: !root.yamlLoading; onClicked: root.closeYamlEditor() }
               }
             }
@@ -1147,15 +1169,30 @@ Ui.Panel {
               onClicked: { root.addServiceVisible = !root.addServiceVisible; root.yamlEditorOpen = false; root.notice = "" }
             }
             Ui.Button {
-              text: "Edit services.yaml"
-              enabled: root.writeControlsReady && !root.service.mcpBusy
-              visible: root.writeControlsReady && !root.service.mcpBusy
-              onClicked: { root.addServiceVisible = false; root.openYamlEditor() }
+              text: root.yamlLoading ? "Reading…" : "View services.yaml"
+              enabled: root.service.mcpAuthenticated && root.service.mcpReadEnabled && !root.service.mcpBusy
+              visible: root.service.mcpAuthenticated && root.service.mcpReadEnabled
+              onClicked: { root.addServiceVisible = false; root.requestYamlView() }
             }
             Item { Layout.fillWidth: true }
             Ui.Button { text: "Open Homepage"; enabled: Boolean(root.service.baseUrl); onClicked: root.openUrl(root.service.baseUrl) }
           }
         }
+      }
+
+      Ui.ConfirmDialog {
+        anchors.fill: parent
+        z: 9
+        opened: root.yamlViewPromptOpen
+        message: "services.yaml may contain API keys, tokens or passwords. It will be shown locally and not persisted by OmaHomepage. Continue?"
+        cancelText: "Cancel"
+        confirmText: "View file"
+        background: root.bar ? root.bar.background : Color.popups.background
+        foreground: root.foreground
+        selectedText: Color.accent
+        fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+        onCanceled: root.yamlViewPromptOpen = false
+        onConfirmed: root.loadYamlView()
       }
 
       Ui.ConfirmDialog {

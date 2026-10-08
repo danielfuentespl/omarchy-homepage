@@ -30,14 +30,22 @@ assert re.search(r"(?m)^        run: \.\/tests\/run$", workflow), "CI should run
 assert not re.search(r"(?im)^\s+(?:uses|run): .*?(?:release|upload-artifact|publish)", workflow), "CI must not publish or create releases"
 keys = {item["key"] for item in manifest["barWidget"]["schema"]}
 assert keys == {"baseUrl", "refreshIntervalSec", "requestTimeoutMs", "staleAfterSec", "caCertPath", "tlsTrustMode",
-                "tlsTrustOrigin", "tlsTrustFingerprint", "secretId", "editingEnabled", "mcpPath"}
+                "tlsTrustOrigin", "tlsTrustFingerprint", "secretId", "mcpPath"}
 settings = {item["key"]: item for item in manifest["barWidget"]["schema"]}
 assert settings["baseUrl"]["defaultValue"] == ""
-assert settings["editingEnabled"]["defaultValue"] is False
 assert settings["tlsTrustMode"]["defaultValue"] == "system"
-assert manifest["barWidget"]["defaults"]["editingEnabled"] is False
 assert "Homepage's MCP token" in manifest["barWidget"]["disclaimer"]
+assert "editingEnabled" not in manifest["barWidget"]["defaults"]
+assert "editingEnabled" not in settings
 panel = (root / "Panel.qml").read_text(encoding="utf-8")
+assert "View services.yaml" in panel and "root.requestYamlView()" in panel
+assert "services.yaml may contain API keys, tokens or passwords" in panel
+client = (root / "McpClient.qml").read_text(encoding="utf-8")
+assert "writeEnabled = false" in client
+assert 'if (httpStatus === 404) status = "MCP UNAVAILABLE"' in client
+assert "Homepage MCP requires Homepage v2.0.0 or newer" in (root / "README.md").read_text(encoding="utf-8")
+assert "validated against v2.4.0" in (root / "docs/SECURITY.md").read_text(encoding="utf-8")
+
 assert "QtQuick.Dialogs" not in panel and "FileDialog" not in panel, "avoid the crashing GTK/GVFS file picker"
 assert "Absolute path to public CA PEM" in panel and "root.importSelectedCa()" in panel
 assert 'runTlsHelper("trust-leaf"' in panel and "leafVerifyTransport.start" in panel

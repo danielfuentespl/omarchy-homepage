@@ -17,9 +17,12 @@ Item {
   property string mcpStatus: mcpClient.status
   property string mcpMessage: mcpClient.message
   property bool mcpWriteEnabled: mcpClient.writeEnabled
+  property bool mcpServerWriteAvailable: mcpClient.serverWriteAvailable
+  property bool mcpReadEnabled: mcpClient.readEnabled
+  property var mcpTools: mcpClient.tools
   property bool mcpAuthenticated: mcpClient.authenticated
   property bool mcpBusy: mcpClient.busy
-  property bool editingEnabled: boolSetting("editingEnabled", false)
+  property bool editingEnabled: false
   property var baseUrlResult: Model.normalizeBaseUrl(setting("baseUrl", ""))
   property string baseUrl: baseUrlResult.ok ? baseUrlResult.value : ""
   property string mcpPath: String(setting("mcpPath", "/api/mcp") || "/api/mcp")
@@ -42,18 +45,13 @@ Item {
     return value === undefined || value === null ? fallback : value;
   }
 
-  function boolSetting(name, fallback) {
-    const value = setting(name, fallback);
-    return value === true || value === "true";
-  }
-
   function configurationKey() {
     return JSON.stringify([
       String(setting("baseUrl", "")), String(setting("refreshIntervalSec", 60)),
       String(setting("requestTimeoutMs", 8000)), String(setting("staleAfterSec", 300)),
       caCertPath, tlsTrustMode, tlsTrustOrigin, tlsTrustFingerprint,
       String(setting("secretId", "default") || "default"),
-      String(setting("mcpPath", "/api/mcp") || "/api/mcp"), String(boolSetting("editingEnabled", false))
+      String(setting("mcpPath", "/api/mcp") || "/api/mcp")
     ]);
   }
 
@@ -102,7 +100,10 @@ Item {
       secretId,
       caCertPath: effectiveCaCertPath,
       mcpPath,
-      editingEnabled,
+      generation: _generation,
+      tlsTrustMode,
+      tlsTrustOrigin,
+      tlsTrustFingerprint,
       requestTimeoutMs
     });
   }
@@ -216,6 +217,9 @@ Item {
     }
     onMessageChanged: root.mcpMessage = message
     onWriteEnabledChanged: root.mcpWriteEnabled = writeEnabled
+    onServerWriteAvailableChanged: root.mcpServerWriteAvailable = serverWriteAvailable
+    onReadEnabledChanged: root.mcpReadEnabled = readEnabled
+    onToolsChanged: root.mcpTools = tools
     onAuthenticatedChanged: root.mcpAuthenticated = authenticated
     onBusyChanged: root.mcpBusy = busy
   }

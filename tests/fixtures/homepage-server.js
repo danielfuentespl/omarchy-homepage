@@ -27,6 +27,8 @@ function createHomepageServer(options = {}) {
     if (request.url !== "/api/mcp" || request.method !== "POST") {
       response.writeHead(404, { "content-type": "application/json" }); response.end("{}"); return;
     }
+    if (options.mcpDelayMs) await new Promise(resolve => setTimeout(resolve, options.mcpDelayMs));
+    if (options.mcpRedirect) { response.writeHead(options.mcpRedirect, { location: "/mcp-target" }); response.end("redirect"); return; }
     if (options.mcpStatus) { response.writeHead(options.mcpStatus, { "content-type": "application/json" }); response.end("{}"); return; }
     const expected = options.token || "a".repeat(40);
     if (request.headers.authorization !== "Bearer " + expected) {
@@ -38,6 +40,9 @@ function createHomepageServer(options = {}) {
     let rpc;
     try { rpc = JSON.parse(body); } catch (_) {
       response.writeHead(400, { "content-type": "application/json" }); response.end("{}"); return;
+    }
+    if (options.mcpBody !== undefined) {
+      response.writeHead(200, { "content-type": "application/json" }); response.end(options.mcpBody); return;
     }
     const method = rpc.method;
     const params = rpc.params || {};
@@ -52,7 +57,9 @@ function createHomepageServer(options = {}) {
       response.end("not-json"); return;
     }
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
+    const responseObject = options.mcpMissingResult ? { jsonrpc: "2.0", id: rpc.id }
+      : { jsonrpc: "2.0", id: rpc.id + (options.mcpWrongId ? 1 : 0), result };
+    response.end(JSON.stringify(responseObject));
   };
   const server = http.createServer((request, response) => {
     handleRequest(request, response).catch(() => {

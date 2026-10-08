@@ -32,6 +32,15 @@ test("builds a valid one-line curl write-out format", () => {
   });
 });
 
+test("system trust uses HTTPS defaults without bypass flags or custom trust overrides", () => {
+  const built = Curl.buildRequest({ method: "POST", url: "https://homepage.example.test/api/mcp", timeoutSec: 8,
+    token: "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6", body: "{}" }, "OMAHP_SYSTEM_TRUST");
+  assert.equal(built.ok, true);
+  assert.match(built.text, /url = "https:\/\/homepage/);
+  assert.doesNotMatch(built.text, /(?:--insecure|\binsecure\s*=|\blocation\s*=|cacert\s*=)/i);
+  assert.deepEqual(Curl.curlArguments(), ["-q", "--config", "-"]);
+});
+
 test("uses only a verified custom CA option and never enables insecure TLS", () => {
   const built = Curl.buildRequest({ method: "POST", url: "https://homepage.example.test/api/mcp", timeoutSec: 8,
     caCertPath: "/home/user/.config/omaops/homepage/trust/home.pem",
