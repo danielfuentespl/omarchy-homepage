@@ -68,7 +68,7 @@
       "key": "caCertPath",
       "type": "string",
       "label": "Homepage TLS certificate path",
-      "description": "Managed by Configure Homepage after validating a CA or explicitly trusting a self-signed certificate.",
+      "description": "Managed by Configure Homepage after validating a private CA or explicitly trusting the presented leaf certificate.",
       "defaultValue": ""
       },
       {

@@ -281,22 +281,19 @@ def evaluate_chain(host, chain, ca_file=None):
         required = ("subject", "issuer", "notBefore", "notAfter", "sha256 Fingerprint")
         if any(not fields.get(key) for key in required):
             raise CertificateError("CERTIFICATE_INVALID", "The presented certificate is missing required metadata.")
+        fingerprint = fields["sha256 Fingerprint"].replace(":", "").lower()
+        metadata = {"host": host, "subject": fields["subject"], "issuer": fields["issuer"], "sans": sans,
+                    "validFrom": fields["notBefore"], "validUntil": fields["notAfter"],
+                    "fingerprint": fields["sha256 Fingerprint"], "fingerprintHex": fingerprint}
         validity = certificate_validity(fields["notBefore"], fields["notAfter"])
         if validity == "CERTIFICATE_NOT_YET_VALID":
-            return {"ok": False, "kind": "CERTIFICATE_NOT_YET_VALID", "message": "The server certificate is not valid yet.",
-                    "host": host, "subject": fields["subject"], "issuer": fields["issuer"], "sans": sans,
-                    "validFrom": fields["notBefore"], "validUntil": fields["notAfter"], "fingerprint": fields["sha256 Fingerprint"]}
+            return {"ok": False, "kind": "CERTIFICATE_NOT_YET_VALID", "message": "The server certificate is not valid yet.", **metadata}
         if validity == "CERTIFICATE_EXPIRED":
-            return {"ok": False, "kind": "CERTIFICATE_EXPIRED", "message": "The server certificate has expired.",
-                    "host": host, "subject": fields["subject"], "issuer": fields["issuer"], "sans": sans,
-                    "validFrom": fields["notBefore"], "validUntil": fields["notAfter"], "fingerprint": fields["sha256 Fingerprint"]}
+            return {"ok": False, "kind": "CERTIFICATE_EXPIRED", "message": "The server certificate has expired.", **metadata}
         hostname_option = "-checkip" if _is_ip(host) else "-checkhost"
         host_result = run(["openssl", "x509", "-in", str(paths[0]), "-noout", hostname_option, host])
         if host_result.returncode:
-            return {"ok": False, "kind": "HOSTNAME_MISMATCH", "message": "The certificate does not match the configured hostname.",
-                    "host": host, "subject": fields["subject"], "issuer": fields["issuer"], "sans": sans,
-                    "validFrom": fields["notBefore"], "validUntil": fields["notAfter"], "fingerprint": fields["sha256 Fingerprint"]}
-        fingerprint = fields["sha256 Fingerprint"].replace(":", "").lower()
+            return {"ok": False, "kind": "HOSTNAME_MISMATCH", "message": "The certificate does not match the configured hostname.", **metadata}
         is_self_signed, _ = verify(host, chain[0], chain[1:], self_signed=True)
         is_self_signed = is_self_signed and fields["subject"] == fields["issuer"]
         is_system_trusted, system_error = verify(host, chain[0], chain[1:])
@@ -307,23 +304,19 @@ def evaluate_chain(host, chain, ca_file=None):
                 mode = "CUSTOM CA"
             else:
                 return {"ok": False, "kind": "CA_FILE_INVALID", "message": "The selected CA does not verify the server certificate and hostname.",
-                        "host": host, "subject": fields["subject"], "issuer": fields["issuer"], "sans": sans,
-                        "validFrom": fields["notBefore"], "validUntil": fields["notAfter"], "fingerprint": fields["sha256 Fingerprint"], "selfSigned": is_self_signed}
+                        **metadata, "selfSigned": is_self_signed}
         elif is_system_trusted:
             mode = "SYSTEM TRUST"
         elif is_self_signed:
             mode = "SELF-SIGNED TRUST AVAILABLE"
         else:
             return {"ok": False, "kind": "PRIVATE_CA_REQUIRED", "message": "TLS certificate not trusted. A private CA is required.",
-                    "host": host, "subject": fields["subject"], "issuer": fields["issuer"], "sans": sans,
-                    "validFrom": fields["notBefore"], "validUntil": fields["notAfter"], "fingerprint": fields["sha256 Fingerprint"], "selfSigned": False,
-                    "systemError": system_error[-400:]}
+                    **metadata, "selfSigned": is_self_signed, "trustAvailable": True, "systemError": system_error[-400:]}
         message = "Certificate chain and hostname verified with " + mode + "." if mode in ("SYSTEM TRUST", "CUSTOM CA") else \
-            "Unverified certificate presented by server; self-signature, hostname and validity inspected, but it is not trusted yet."
+            "Unverified certificate presented by server; hostname and validity inspected, but it is not trusted yet."
         return {"ok": True, "kind": mode, "message": message,
-                "host": host, "subject": fields["subject"], "issuer": fields["issuer"], "sans": sans,
-                "validFrom": fields["notBefore"], "validUntil": fields["notAfter"], "fingerprint": fields["sha256 Fingerprint"], "fingerprintHex": fingerprint,
-                "selfSigned": is_self_signed, "systemTrusted": is_system_trusted}
+                **metadata, "selfSigned": is_self_signed, "systemTrusted": is_system_trusted,
+                "trustAvailable": mode == "SELF-SIGNED TRUST AVAILABLE"}
     finally:
         temporary.cleanup()
 
@@ -367,17 +360,17 @@ def import_ca(url, source_path):
             "fingerprint": fingerprint}
 
 
-def trust_self_signed(url, expected_fingerprint):
+def trust_leaf(url, expected_fingerprint):
     host, port = parse_url(url)
     chain = fetch_chain(host, port)
     check = evaluate_chain(host, chain)
-    if not check.get("ok") or check.get("kind") != "SELF-SIGNED TRUST AVAILABLE" or not check.get("selfSigned"):
-        raise CertificateError(check.get("kind", "CERTIFICATE_INVALID"), check.get("message", "This certificate cannot be trusted as self-signed."))
+    if not check.get("trustAvailable"):
+        raise CertificateError(check.get("kind", "CERTIFICATE_INVALID"), check.get("message", "This certificate is not eligible for explicit trust."))
     fingerprint = check["fingerprintHex"]
     if fingerprint != str(expected_fingerprint or "").replace(":", "").lower():
         raise CertificateError("CERTIFICATE_CHANGED", "The server certificate changed after inspection. Inspect and confirm the new fingerprint.")
     destination = store_certificate(host, fingerprint, chain[0] + b"\n")
-    return {"ok": True, "kind": "SELF-SIGNED TRUST", "host": host, "caPath": destination,
+    return {"ok": True, "kind": "TRUSTED CERTIFICATE PENDING VERIFICATION", "host": host, "caPath": destination,
             "fingerprint": fingerprint, "subject": check["subject"], "issuer": check["issuer"]}
 
 
@@ -391,15 +384,15 @@ def remove_trust(host, certificate_path):
     filenames = read_trust_index(directory, host)
     if candidate.name not in filenames:
         raise CertificateError("TRUST_PATH_INVALID", "The selected certificate is not recorded as an OmaHomepage-managed copy.")
-    for filename in filenames:
-        path = directory / filename
-        if not path.exists() and not path.is_symlink():
-            continue
-        metadata = path.lstat()
-        if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
-            raise CertificateError("TRUST_PATH_INVALID", "A local certificate copy is not a regular file owned by this user.")
-        path.unlink()
-    trust_index_path(directory, host).unlink(missing_ok=True)
+    metadata = candidate.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
+        raise CertificateError("TRUST_PATH_INVALID", "The local certificate copy is not a regular file owned by this user.")
+    candidate.unlink()
+    remaining = [filename for filename in filenames if filename != candidate.name]
+    if remaining:
+        write_trust_index(directory, host, remaining)
+    else:
+        trust_index_path(directory, host).unlink(missing_ok=True)
     return {"ok": True, "host": host}
 
 
@@ -411,9 +404,9 @@ def main(argv):
         result(**inspect(url, ca_file=argv[3] if len(argv) == 4 else None))
     elif action == "import-ca" and len(argv) == 4:
         result(**import_ca(url, argv[3]))
-    elif action == "trust-self-signed" and len(argv) == 4:
-        result(**trust_self_signed(url, argv[3]))
-    elif action == "remove-trust" and len(argv) == 4:
+    elif action == "trust-leaf" and len(argv) == 4:
+        result(**trust_leaf(url, argv[3]))
+    elif action in ("remove-trust", "rollback-leaf") and len(argv) == 4:
         host, _ = parse_url(url)
         result(**remove_trust(host, argv[3]))
     else:

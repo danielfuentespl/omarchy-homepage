@@ -37,4 +37,9 @@ assert settings["editingEnabled"]["defaultValue"] is False
 assert settings["tlsTrustMode"]["defaultValue"] == "system"
 assert manifest["barWidget"]["defaults"]["editingEnabled"] is False
 assert "Homepage's MCP token" in manifest["barWidget"]["disclaimer"]
+panel = (root / "Panel.qml").read_text(encoding="utf-8")
+assert "QtQuick.Dialogs" not in panel and "FileDialog" not in panel, "avoid the crashing GTK/GVFS file picker"
+assert "Absolute path to public CA PEM" in panel and "root.importSelectedCa()" in panel
+assert 'runTlsHelper("trust-leaf"' in panel and "leafVerifyTransport.start" in panel
+assert "rollbackLeafTrust" in panel and "This TLS backend cannot use the presented certificate as a trust anchor" in panel
 print("manifest, schema and repository files: OK")

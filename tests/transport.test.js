@@ -158,6 +158,42 @@ test("HTTPS rejects untrusted certificates and accepts an explicitly selected CA
   assert.equal(trusted.stdout, "[]");
 });
 
+test("curl can validate a private-CA leaf used as an explicit trust anchor", async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omahome-leaf-trust-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const caKey = path.join(directory, "ca-key.pem");
+  const caCert = path.join(directory, "ca.pem");
+  const leafKey = path.join(directory, "leaf-key.pem");
+  const csr = path.join(directory, "leaf.csr");
+  const leafCert = path.join(directory, "leaf.pem");
+  const ext = path.join(directory, "leaf.ext");
+  const ca = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", caKey,
+    "-out", caCert, "-days", "1", "-subj", "/CN=OmaHomepage Private Test CA",
+    "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign"], { stdio: "ignore" });
+  assert.equal(ca.status, 0, "openssl must create a private test CA");
+  const request = spawnSync("openssl", ["req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", leafKey,
+    "-out", csr, "-subj", "/CN=127.0.0.1"], { stdio: "ignore" });
+  assert.equal(request.status, 0, "openssl must create a server CSR");
+  fs.writeFileSync(ext, "subjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n");
+  const signed = spawnSync("openssl", ["x509", "-req", "-in", csr, "-CA", caCert, "-CAkey", caKey,
+    "-CAcreateserial", "-out", leafCert, "-days", "1", "-extfile", ext], { stdio: "ignore" });
+  assert.equal(signed.status, 0, "openssl must sign the leaf with the private CA");
+  const server = https.createServer({ key: fs.readFileSync(leafKey), cert: fs.readFileSync(leafCert) }, (request, response) => {
+    if (request.url === "/__omahp_probe") { response.writeHead(204); response.end(); return; }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end("[]");
+  });
+  const base = await startServer(t, server, "https");
+  if (!base) return;
+  const rejected = curl(base + "/api/services");
+  assert.notEqual(rejected.status, 0);
+  assert.equal(Curl.errorKind(rejected.status), "tls");
+  const trusted = curl(base + "/api/services", { caCertPath: leafCert });
+  assert.equal(trusted.status, 0, trusted.stderr);
+  assert.equal(Curl.parseOutput(trusted.stdout, trusted.stderr, "OMAHP_TEST").status, 200);
+  assert.equal(trusted.stdout, "[]");
+});
+
 test("enforces transfer and parser size limits", async t => {
   const body = "x".repeat(Model.LIMITS.responseBytes + 100);
   const server = http.createServer((request, response) => {

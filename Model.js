@@ -316,7 +316,8 @@ function apiState(status, exitCode, hasCachedData, ageSeconds, staleSeconds) {
 function tlsTrustStatus(mode) {
   switch (String(mode || "system")) {
     case "custom-ca": return "CUSTOM CA";
-    case "self-signed": return "SELF-SIGNED TRUST";
+    case "self-signed":
+    case "trusted-certificate": return "TRUSTED CERTIFICATE";
     default: return "SYSTEM TRUST";
   }
 }

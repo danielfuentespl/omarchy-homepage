@@ -21,7 +21,8 @@ test("custom trust is limited to the exact configured Homepage origin", () => {
   assert.equal(Model.effectiveCaCertPath("https://other.lab.local", path, "https://homepage.lab.local"), "");
   assert.equal(Model.effectiveCaCertPath("https://homepage.lab.local:8443", path, "https://homepage.lab.local"), "");
   assert.equal(Model.effectiveCaCertPath("https://homepage.lab.local", path, ""), "");
-  assert.equal(Model.tlsTrustStatus("self-signed"), "SELF-SIGNED TRUST");
+  assert.equal(Model.tlsTrustStatus("self-signed"), "TRUSTED CERTIFICATE");
+  assert.equal(Model.tlsTrustStatus("trusted-certificate"), "TRUSTED CERTIFICATE");
   assert.equal(Model.tlsTrustStatus("custom-ca"), "CUSTOM CA");
   assert.equal(Model.tlsTrustStatus("system"), "SYSTEM TRUST");
 });

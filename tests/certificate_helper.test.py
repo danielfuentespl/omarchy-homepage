@@ -76,6 +76,7 @@ class CertificateHelperTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["kind"], "SELF-SIGNED TRUST AVAILABLE")
         self.assertTrue(result["selfSigned"])
+        self.assertTrue(result["trustAvailable"])
         self.assertTrue(result["fingerprintHex"])
 
     def test_changed_self_signed_certificate_fails_against_previous_local_trust(self):
@@ -86,22 +87,38 @@ class CertificateHelperTests(unittest.TestCase):
         self.assertEqual(current["kind"], "CA_FILE_INVALID")
         self.assertFalse(current["ok"])
 
-    def test_self_signed_trust_requires_the_exact_confirmed_fingerprint(self):
-        cert = pathlib.Path(self.self_cert).read_bytes()
-        inspected = Cert.evaluate_chain("self.homepage.test", [cert])
+    def test_private_ca_leaf_can_be_trusted_by_exact_fingerprint_without_trusting_the_ca(self):
+        cert = pathlib.Path(self.leaf).read_bytes()
+        inspected = Cert.evaluate_chain("homepage.test", [cert])
+        self.assertEqual(inspected["kind"], "PRIVATE_CA_REQUIRED")
+        self.assertTrue(inspected["trustAvailable"])
+        self.assertFalse(inspected["selfSigned"])
         with mock.patch.object(Cert, "fetch_chain", return_value=[cert]) as fetched, mock.patch.object(
             Cert, "store_certificate", return_value="/home/test/.config/omaops/homepage/trust/self.pem"
         ) as stored:
-            trusted = Cert.trust_self_signed("https://self.homepage.test", inspected["fingerprintHex"])
+            trusted = Cert.trust_leaf("https://homepage.test", inspected["fingerprintHex"])
             self.assertEqual(trusted["fingerprint"], inspected["fingerprintHex"])
             fetched.assert_called_once()
-            stored.assert_called_once_with("self.homepage.test", inspected["fingerprintHex"], cert + b"\n")
+            stored.assert_called_once_with("homepage.test", inspected["fingerprintHex"], cert + b"\n")
+            saved = stored.call_args.args[2]
+            self.assertIn(b"BEGIN CERTIFICATE", saved)
+            self.assertNotIn(b"PRIVATE KEY", saved)
         with mock.patch.object(Cert, "fetch_chain", return_value=[cert]), mock.patch.object(
             Cert, "store_certificate"
         ) as stored:
             with self.assertRaisesRegex(Cert.CertificateError, "changed after inspection"):
-                Cert.trust_self_signed("https://self.homepage.test", "00" * 32)
+                Cert.trust_leaf("https://homepage.test", "00" * 32)
             stored.assert_not_called()
+
+    def test_leaf_trust_rejects_hostname_or_validity_failure(self):
+        cert = pathlib.Path(self.leaf).read_bytes()
+        for state in ("HOSTNAME_MISMATCH", "CERTIFICATE_EXPIRED", "CERTIFICATE_NOT_YET_VALID"):
+            with mock.patch.object(Cert, "fetch_chain", return_value=[cert]), mock.patch.object(
+                Cert, "evaluate_chain", return_value={"ok": False, "kind": state, "trustAvailable": False}
+            ), mock.patch.object(Cert, "store_certificate") as stored:
+                with self.assertRaises(Cert.CertificateError):
+                    Cert.trust_leaf("https://homepage.test", "00" * 32)
+                stored.assert_not_called()
 
     def test_private_ca_verifies_server_and_wrong_ca_does_not(self):
         result = Cert.evaluate_chain("homepage.test", self.chain(self.leaf), str(self.ca))
@@ -148,7 +165,7 @@ class CertificateHelperTests(unittest.TestCase):
                     Cert.remove_trust("two.homepage.test", one)
                 Cert.remove_trust("one.homepage.test", one)
                 self.assertFalse(pathlib.Path(one).exists())
-                self.assertFalse(pathlib.Path(previous).exists())
+                self.assertTrue(pathlib.Path(previous).exists())
                 self.assertTrue(pathlib.Path(two).exists())
                 self.assertTrue(unmanaged.exists())
 
