@@ -130,6 +130,12 @@ function originUrl(raw) {
     (parsed.authority.port ? ":" + String(Number(parsed.authority.port)) : "");
 }
 
+function effectiveCaCertPath(baseUrl, caCertPath, trustOrigin) {
+  const path = String(caCertPath || "").trim();
+  const origin = originUrl(baseUrl);
+  return path && origin && String(trustOrigin || "").trim().toLowerCase() === origin ? path : "";
+}
+
 function normalizeMcpPath(raw) {
   const value = typeof raw === "string" ? raw.trim() : "";
   if (!value || value.length > 256 || value.charAt(0) !== "/" || value.indexOf("//") === 0 || /[?#\\\s\u0000-\u001f\u007f]/.test(value)) return "";
@@ -307,6 +313,14 @@ function apiState(status, exitCode, hasCachedData, ageSeconds, staleSeconds) {
   return hasCachedData ? statusAfterFailure(true, ageSeconds, staleSeconds) : "ERROR";
 }
 
+function tlsTrustStatus(mode) {
+  switch (String(mode || "system")) {
+    case "custom-ca": return "CUSTOM CA";
+    case "self-signed": return "SELF-SIGNED TRUST";
+    default: return "SYSTEM TRUST";
+  }
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     LIMITS,
@@ -315,6 +329,7 @@ if (typeof module !== "undefined") {
     safeHttpUrl,
     normalizeBaseUrl,
     originUrl,
+    effectiveCaCertPath,
     normalizeMcpPath,
     parseServices,
     filterGroups,
@@ -324,6 +339,7 @@ if (typeof module !== "undefined") {
     flattenGroups,
     clampSeconds,
     statusAfterFailure,
-    apiState
+    apiState,
+    tlsTrustStatus
   };
 }

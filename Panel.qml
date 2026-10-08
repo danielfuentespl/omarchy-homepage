@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Dialogs as Dialogs
 import QtQuick.Controls as QQC
 import QtQuick.Layouts
 import Quickshell
@@ -22,6 +23,14 @@ Ui.Panel {
   property string notice: ""
   property bool configEditing: false
   property string configDraft: ""
+  property bool tlsBusy: false
+  property int tlsOperationId: 0
+  property var tlsProcess: null
+  property var tlsCertificate: null
+  property string tlsNotice: ""
+  property string tlsConfirmAction: ""
+  property bool tlsConfirmOpen: false
+  property bool removeTrustConfirmOpen: false
   property bool addServiceVisible: false
   property bool addConfirmOpen: false
   property string newGroup: ""
@@ -62,6 +71,16 @@ Ui.Panel {
   readonly property int matchingServiceCount: Model.countServices(visibleGroups)
   readonly property bool writeControlsReady: service.editingEnabled === true && service.mcpAuthenticated === true
       && service.mcpWriteEnabled === true && service.mcpBusy !== true
+  readonly property string tlsAddress: configEditing ? configDraft : service.baseUrl
+  readonly property string tlsOrigin: Model.originUrl(tlsAddress)
+  readonly property bool tlsSettingsMatchOrigin: tlsOrigin !== "" &&
+    String(setting("tlsTrustOrigin", "") || "").toLowerCase() === tlsOrigin
+  readonly property string tlsTrustMode: tlsSettingsMatchOrigin ? String(setting("tlsTrustMode", "system") || "system") : "system"
+  readonly property string tlsTrustFingerprint: tlsSettingsMatchOrigin ? String(setting("tlsTrustFingerprint", "") || "").toLowerCase() : ""
+  readonly property string effectiveTlsCaPath: Model.effectiveCaCertPath(tlsAddress, setting("caCertPath", ""), setting("tlsTrustOrigin", ""))
+  readonly property bool certificateChanged: tlsCertificate && tlsTrustMode === "self-signed" &&
+    (tlsCertificate.fingerprintHex || String(tlsCertificate.fingerprint || "").replace(/:/g, "").toLowerCase()) &&
+    tlsTrustFingerprint && (tlsCertificate.fingerprintHex || String(tlsCertificate.fingerprint || "").replace(/:/g, "").toLowerCase()) !== tlsTrustFingerprint
 
   function toggleGroup(path, expanded) {
     if (searching) return
@@ -154,6 +173,8 @@ Ui.Panel {
     }
     const entry = { id: moduleName }
     for (const key in settings) if (key !== "id") entry[key] = settings[key]
+    const normalizedAddress = Model.normalizeBaseUrl(tlsAddress)
+    if (normalizedAddress.ok) entry.baseUrl = normalizedAddress.value
     entry[name] = value
     const changed = bar.shell.updateEntryInline(moduleName, entry)
     if (!changed && String(setting(name, "")) !== String(value)) {
@@ -162,7 +183,168 @@ Ui.Panel {
     }
     settings = entry
     if (hostedService) hostedService.settings = entry
+    configEditing = false
     return true
+  }
+
+  function saveTlsTrust(path, mode, fingerprint) {
+    if (!bar || !bar.shell || typeof bar.shell.updateEntryInline !== "function") {
+      notice = "This Omarchy version cannot save plugin settings. Update Omarchy and try again."
+      return false
+    }
+    const entry = { id: moduleName }
+    for (const key in settings) if (key !== "id") entry[key] = settings[key]
+    const normalizedAddress = Model.normalizeBaseUrl(tlsAddress)
+    if (normalizedAddress.ok) entry.baseUrl = normalizedAddress.value
+    entry.caCertPath = path || ""
+    entry.tlsTrustMode = mode || "system"
+    entry.tlsTrustOrigin = mode && mode !== "system" ? tlsOrigin : ""
+    entry.tlsTrustFingerprint = fingerprint || ""
+    const changed = bar.shell.updateEntryInline(moduleName, entry)
+    const matches = ["baseUrl", "caCertPath", "tlsTrustMode", "tlsTrustOrigin", "tlsTrustFingerprint"]
+      .every(function(key) { return String(setting(key, "")) === String(entry[key] || "") })
+    if (!changed && !matches) {
+      notice = "Could not save the OmaHomepage trust setting."
+      return false
+    }
+    settings = entry
+    if (hostedService) hostedService.settings = entry
+    configEditing = false
+    return true
+  }
+
+  function cancelTlsOperation() {
+    tlsOperationId++
+    if (tlsProcess) {
+      const process = tlsProcess
+      tlsProcess = null
+      process.running = false
+      process.destroy()
+    }
+    tlsBusy = false
+  }
+
+  function runTlsHelper(action, extraArgs) {
+    const normalized = Model.normalizeBaseUrl(tlsAddress)
+    if (!normalized.ok || normalized.value.indexOf("https://") !== 0) {
+      tlsNotice = "Certificate inspection and custom trust require an HTTPS address."
+      return false
+    }
+    cancelTlsOperation()
+    const id = ++tlsOperationId
+    const args = [action, normalized.value].concat(extraArgs || [])
+    const process = tlsHelperComponent.createObject(root, {
+      operationId: id,
+      operation: action,
+      operationOrigin: Model.originUrl(normalized.value),
+      helperArgs: args,
+      running: true
+    })
+    if (!process) {
+      tlsNotice = "Could not start the local certificate inspection helper."
+      return false
+    }
+    tlsProcess = process
+    tlsBusy = true
+    tlsNotice = action === "inspect" ? "Inspecting the unverified TLS certificate without sending an HTTP request…"
+      : action === "import-ca" ? "Verifying the selected CA against this server…"
+      : action === "remove-trust" ? "Removing OmaHomepage's local certificate copy…"
+      : "Verifying the self-signed certificate…"
+    return true
+  }
+
+  function finishTlsHelper(process, exitCode) {
+    if (tlsProcess === process) tlsProcess = null
+    tlsBusy = false
+    if (process.operationId !== tlsOperationId || process.operationOrigin !== tlsOrigin) {
+      process.destroy()
+      return
+    }
+    let parsed = null
+    try { parsed = JSON.parse(process.stdoutText || "") } catch (error) {}
+    const action = process.operation
+    process.destroy()
+    if (!parsed || parsed.ok !== true) {
+      tlsCertificate = action === "inspect" && parsed ? parsed : tlsCertificate
+      tlsNotice = parsed && parsed.message ? parsed.message : "Certificate operation failed. No trust setting was changed."
+      if (action === "inspect" && certificateChanged) tlsNotice = "Certificate changed. The new certificate is blocked; inspect it before replacing local trust."
+      return
+    }
+    if (action === "inspect") {
+      tlsCertificate = parsed
+      tlsNotice = parsed.message || "Certificate inspection complete."
+      if ((parsed.kind === "SYSTEM TRUST" || parsed.kind === "CUSTOM CA") && Model.originUrl(service.baseUrl) === tlsOrigin) service.refresh()
+      else if (parsed.kind === "SYSTEM TRUST" || parsed.kind === "CUSTOM CA") tlsNotice = "TLS verified for this address. Save it to load services."
+      if (certificateChanged) tlsNotice = "Certificate changed. The new certificate is blocked; inspect it before replacing local trust."
+      return
+    }
+    if (action === "import-ca" || action === "trust-self-signed") {
+      if (saveTlsTrust(parsed.caPath,
+          action === "import-ca" ? "custom-ca" : "self-signed",
+          action === "import-ca" ? tlsCertificate.fingerprintHex : parsed.fingerprint)) {
+        tlsCertificate = null
+        tlsNotice = action === "import-ca" ? "Private CA verified and imported for this Homepage origin." : "Self-signed certificate trusted for this Homepage origin."
+        service.refresh()
+      }
+      return
+    }
+    if (action === "remove-trust") {
+      if (saveTlsTrust("", "system", "")) {
+        tlsCertificate = null
+        tlsNotice = "OmaHomepage local trust removed. System trust will be used."
+        service.refresh()
+      }
+    }
+  }
+
+  function testTlsConnection() {
+    if (Model.originUrl(service.baseUrl) === tlsOrigin) service.refresh()
+    runTlsHelper("inspect", effectiveTlsCaPath ? [effectiveTlsCaPath] : [])
+  }
+
+  function inspectCertificate() {
+    runTlsHelper("inspect", effectiveTlsCaPath ? [effectiveTlsCaPath] : [])
+  }
+
+  function beginCertificateTrust(replace) {
+    if (!tlsCertificate || !tlsCertificate.selfSigned || !tlsCertificate.ok ||
+        tlsCertificate.kind !== "SELF-SIGNED TRUST AVAILABLE" && !replace ||
+        !tlsCertificate.host || !(tlsCertificate.fingerprintHex || tlsCertificate.fingerprint) || certificateChanged !== replace) return
+    tlsConfirmAction = replace ? "replace" : "trust"
+    tlsConfirmOpen = true
+  }
+
+  function confirmCertificateTrust() {
+    const replace = tlsConfirmAction === "replace"
+    tlsConfirmOpen = false
+    tlsConfirmAction = ""
+    if (!tlsCertificate || !tlsCertificate.ok || !tlsCertificate.selfSigned || certificateChanged !== replace) return
+    runTlsHelper("trust-self-signed", [tlsCertificate.fingerprintHex])
+  }
+
+  function removeCustomTrust() {
+    removeTrustConfirmOpen = false
+    const path = String(setting("caCertPath", "") || "")
+    if (path.indexOf("/.config/omaops/homepage/trust/") !== -1) runTlsHelper("remove-trust", [path])
+    else if (saveTlsTrust("", "system", "")) {
+      tlsCertificate = null
+      tlsNotice = "Custom trust removed from OmaHomepage settings."
+      service.refresh()
+    }
+  }
+
+  function selectedCaFile(path) {
+    if (!path) return
+    runTlsHelper("import-ca", [path])
+  }
+
+  function openCaPicker() {
+    const normalized = Model.normalizeBaseUrl(tlsAddress)
+    if (!normalized.ok || normalized.value.indexOf("https://") !== 0) {
+      tlsNotice = "Set an HTTPS Homepage address before importing a CA."
+      return
+    }
+    caFileDialog.open()
   }
 
   function saveBaseUrl() {
@@ -329,6 +511,17 @@ Ui.Panel {
     service.checkMcpIfStale()
     if (!service.baseUrl) beginConfigEditing()
   }
+  onConfigDraftChanged: {
+    if (tlsBusy) cancelTlsOperation()
+    tlsCertificate = null
+    tlsNotice = ""
+  }
+  onSettingsChanged: {
+    if (tlsBusy) cancelTlsOperation()
+    tlsCertificate = null
+    tlsNotice = ""
+  }
+  Component.onDestruction: cancelTlsOperation()
 
   Timer {
     interval: 10000
@@ -343,6 +536,23 @@ Ui.Panel {
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): void { root.service.refresh() }
+  }
+
+  Component {
+    id: tlsHelperComponent
+    Process {
+      id: tlsHelperProcess
+      property int operationId: 0
+      property string operation: ""
+      property string operationOrigin: ""
+      property var helperArgs: []
+      property string stdoutText: ""
+      command: ["/usr/bin/python3", Qt.resolvedUrl("scripts/certificate_helper.py").toString().replace(/^file:\/\//, "")].concat(helperArgs)
+      clearEnvironment: true
+      environment: ({ PATH: "/usr/bin:/bin", LANG: "C.UTF-8", LC_ALL: "C" })
+      stdout: StdioCollector { waitForEnd: true; onStreamFinished: tlsHelperProcess.stdoutText = text }
+      onExited: function(exitCode) { root.finishTlsHelper(tlsHelperProcess, exitCode) }
+    }
   }
 
   Ui.KeyboardPanel {
@@ -366,12 +576,16 @@ Ui.Panel {
         || newSiteMonitorInput.activeFocus || newServerInput.activeFocus || newContainerInput.activeFocus
         || yamlInput.activeFocus
       onCloseRequested: {
-        if (root.yamlConfirmOpen) root.cancelYamlConfirmation()
+        if (root.tlsConfirmOpen) { root.tlsConfirmOpen = false; root.tlsConfirmAction = "" }
+        else if (root.removeTrustConfirmOpen) root.removeTrustConfirmOpen = false
+        else if (root.yamlConfirmOpen) root.cancelYamlConfirmation()
         else if (root.addConfirmOpen) root.cancelAddConfirmation()
         else root.close()
       }
       onReturnRequested: {
-        if (root.yamlConfirmOpen) root.confirmYamlSave()
+        if (root.tlsConfirmOpen) root.confirmCertificateTrust()
+        else if (root.removeTrustConfirmOpen) root.removeCustomTrust()
+        else if (root.yamlConfirmOpen) root.confirmYamlSave()
         else if (root.addConfirmOpen) root.confirmAddService()
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
@@ -595,9 +809,88 @@ Ui.Panel {
                 onTextChanged: root.configDraft = text
                 onAccepted: root.saveBaseUrl()
               }
+              Text {
+                Layout.fillWidth: true
+                text: "TLS · " + Model.tlsTrustStatus(root.tlsTrustMode)
+                color: root.foreground
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.body
+                font.bold: true
+              }
+              RowLayout {
+                Layout.fillWidth: true
+                Ui.Button { text: root.tlsBusy ? "Testing…" : "Test connection"; enabled: !root.tlsBusy; onClicked: root.testTlsConnection() }
+                Ui.Button { text: "Inspect certificate"; enabled: !root.tlsBusy && root.tlsOrigin.indexOf("https://") === 0; onClicked: root.inspectCertificate() }
+              }
+              Text {
+                Layout.fillWidth: true
+                visible: root.tlsNotice !== ""
+                text: root.tlsNotice
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                color: root.foreground
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+              Text {
+                Layout.fillWidth: true
+                visible: root.tlsCertificate !== null
+                text: root.certificateChanged ? "Certificate changed · connection blocked" :
+                  !root.tlsCertificate ? "" : root.tlsCertificate.kind === "PRIVATE_CA_REQUIRED" ? "TLS certificate not trusted · Private CA required" :
+                  root.tlsCertificate.kind === "HOSTNAME_MISMATCH" ? "HOSTNAME MISMATCH · trust is blocked" :
+                  root.tlsCertificate.kind === "CERTIFICATE_EXPIRED" ? "CERTIFICATE EXPIRED · trust is blocked" :
+                  root.tlsCertificate.kind === "CERTIFICATE_NOT_YET_VALID" ? "CERTIFICATE NOT YET VALID · trust is blocked" :
+                  root.tlsCertificate.kind === "SELF-SIGNED TRUST AVAILABLE" ? "Unverified certificate presented by server · self-signed signature and hostname verified" :
+                  root.tlsCertificate.message || "Certificate inspection completed."
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                color: root.tlsCertificate && (root.tlsCertificate.kind === "SYSTEM TRUST" || root.tlsCertificate.kind === "CUSTOM CA") ? root.foreground : root.urgent
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+              GridLayout {
+                Layout.fillWidth: true
+                visible: root.tlsCertificate !== null && Boolean(root.tlsCertificate.fingerprint || root.tlsCertificate.fingerprintHex)
+                columns: 2
+                Text { text: "Hostname"; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { Layout.fillWidth: true; text: root.tlsCertificate ? root.tlsCertificate.host || "" : ""; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { text: "Subject"; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { Layout.fillWidth: true; text: root.tlsCertificate ? root.tlsCertificate.subject || "" : ""; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { text: "Issuer"; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { Layout.fillWidth: true; text: root.tlsCertificate ? root.tlsCertificate.issuer || "" : ""; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { text: "SAN"; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { Layout.fillWidth: true; text: root.tlsCertificate && root.tlsCertificate.sans ? root.tlsCertificate.sans.join(", ") : ""; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { text: "Valid until"; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { Layout.fillWidth: true; text: root.tlsCertificate ? root.tlsCertificate.validUntil || "" : ""; textFormat: Text.PlainText; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { text: "Valid from"; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { Layout.fillWidth: true; text: root.tlsCertificate ? root.tlsCertificate.validFrom || "" : ""; textFormat: Text.PlainText; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { text: "SHA-256"; color: root.foreground; font.pixelSize: Style.font.bodySmall }
+                Text { Layout.fillWidth: true; text: root.tlsCertificate ? root.tlsCertificate.fingerprint || "" : ""; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: root.foreground; font.family: "monospace"; font.pixelSize: Style.font.caption }
+              }
+              RowLayout {
+                Layout.fillWidth: true
+                visible: root.tlsCertificate && (root.tlsCertificate.kind === "PRIVATE_CA_REQUIRED" || root.tlsCertificate.kind === "CA_FILE_INVALID")
+                Ui.Button { text: "Import CA certificate"; enabled: !root.tlsBusy; onClicked: root.openCaPicker() }
+              }
+              RowLayout {
+                Layout.fillWidth: true
+                visible: root.tlsCertificate && root.tlsCertificate.kind === "SELF-SIGNED TRUST AVAILABLE" && !root.certificateChanged
+                Ui.Button { text: "Trust this self-signed certificate"; enabled: !root.tlsBusy; onClicked: root.beginCertificateTrust(false) }
+              }
+              RowLayout {
+                Layout.fillWidth: true
+                visible: root.certificateChanged
+                Ui.Button { text: "Inspect new certificate"; enabled: !root.tlsBusy; onClicked: root.runTlsHelper("inspect", []) }
+                Ui.Button { text: "Replace trust"; enabled: !root.tlsBusy && root.tlsCertificate && root.tlsCertificate.ok && root.tlsCertificate.selfSigned; onClicked: root.beginCertificateTrust(true) }
+              }
+              RowLayout {
+                Layout.fillWidth: true
+                visible: root.tlsSettingsMatchOrigin && (root.tlsTrustMode === "custom-ca" || root.tlsTrustMode === "self-signed")
+                Ui.Button { text: "Remove custom trust"; enabled: !root.tlsBusy; onClicked: root.removeTrustConfirmOpen = true }
+              }
               RowLayout {
                 Ui.Button { text: "Save address"; onClicked: root.saveBaseUrl() }
-                Ui.Button { text: "Cancel"; onClicked: { root.configEditing = false; root.notice = "" } }
+                Ui.Button { text: "Cancel"; onClicked: { root.cancelTlsOperation(); root.tlsCertificate = null; root.tlsNotice = ""; root.configEditing = false; root.notice = "" } }
               }
             }
           }
@@ -734,6 +1027,46 @@ Ui.Panel {
         onCanceled: root.cancelYamlConfirmation()
         onConfirmed: root.confirmYamlSave()
       }
+
+      Ui.ConfirmDialog {
+        anchors.fill: parent
+        z: 12
+        opened: root.tlsConfirmOpen
+        message: (root.tlsConfirmAction === "replace" ? "Replace this host's previous trust? The old fingerprint was " + root.tlsTrustFingerprint + ".\n\n" : "Trust this certificate only for: ") +
+          (root.tlsCertificate ? root.tlsCertificate.host + "\nSubject: " + root.tlsCertificate.subject + "\nIssuer: " + root.tlsCertificate.issuer + "\nValid: " + root.tlsCertificate.validFrom + " — " + root.tlsCertificate.validUntil + "\nSHA-256: " + (root.tlsCertificate.fingerprint || "") : "") +
+          (root.tlsConfirmAction === "replace" ? "\n\nPresented fingerprint: " + (root.tlsCertificate ? root.tlsCertificate.fingerprint || "" : "") : "")
+        cancelText: "Cancel"
+        confirmText: root.tlsConfirmAction === "replace" ? "Replace trust" : "Trust"
+        background: root.bar ? root.bar.background : Color.popups.background
+        foreground: root.foreground
+        selectedText: Color.accent
+        fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+        onCanceled: { root.tlsConfirmOpen = false; root.tlsConfirmAction = "" }
+        onConfirmed: root.confirmCertificateTrust()
+      }
+
+      Ui.ConfirmDialog {
+        anchors.fill: parent
+        z: 13
+        opened: root.removeTrustConfirmOpen
+        message: "Remove OmaHomepage's local TLS trust for " + (root.tlsCertificate ? root.tlsCertificate.host : root.tlsOrigin) + "? System trust will be used afterward."
+        cancelText: "Cancel"
+        confirmText: "Remove trust"
+        background: root.bar ? root.bar.background : Color.popups.background
+        foreground: root.foreground
+        selectedText: Color.accent
+        fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+        onCanceled: root.removeTrustConfirmOpen = false
+        onConfirmed: root.removeCustomTrust()
+      }
     }
+  }
+
+  Dialogs.FileDialog {
+    id: caFileDialog
+    title: "Select a public CA certificate"
+    fileMode: Dialogs.FileDialog.OpenFile
+    nameFilters: ["PEM certificates (*.pem *.crt *.cer)", "All files (*)"]
+    onAccepted: root.selectedCaFile(selectedFile.toLocalFile())
   }
 }

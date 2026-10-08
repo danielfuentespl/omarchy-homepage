@@ -24,6 +24,9 @@
       "requestTimeoutMs": 8000,
       "staleAfterSec": 300,
       "caCertPath": "",
+      "tlsTrustMode": "system",
+      "tlsTrustOrigin": "",
+      "tlsTrustFingerprint": "",
       "secretId": "default",
       "editingEnabled": false,
       "mcpPath": "/api/mcp"
@@ -64,7 +67,26 @@
       {
       "key": "caCertPath",
       "type": "string",
-      "label": "Optional custom CA certificate (PEM)",
+      "label": "Homepage TLS certificate path",
+      "description": "Managed by Configure Homepage after validating a CA or explicitly trusting a self-signed certificate.",
+      "defaultValue": ""
+      },
+      {
+      "key": "tlsTrustMode",
+      "type": "string",
+      "label": "Homepage TLS trust method",
+      "defaultValue": "system"
+      },
+      {
+      "key": "tlsTrustOrigin",
+      "type": "string",
+      "label": "Homepage TLS trust origin",
+      "defaultValue": ""
+      },
+      {
+      "key": "tlsTrustFingerprint",
+      "type": "string",
+      "label": "Homepage TLS certificate fingerprint",
       "defaultValue": ""
       },
       {

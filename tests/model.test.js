@@ -15,6 +15,17 @@ test("normalizes an HTTP(S) Homepage address without credentials or query", () =
   }
 });
 
+test("custom trust is limited to the exact configured Homepage origin", () => {
+  const path = "/home/dani/.config/omaops/homepage/trust/home.pem";
+  assert.equal(Model.effectiveCaCertPath("https://homepage.lab.local", path, "https://homepage.lab.local"), path);
+  assert.equal(Model.effectiveCaCertPath("https://other.lab.local", path, "https://homepage.lab.local"), "");
+  assert.equal(Model.effectiveCaCertPath("https://homepage.lab.local:8443", path, "https://homepage.lab.local"), "");
+  assert.equal(Model.effectiveCaCertPath("https://homepage.lab.local", path, ""), "");
+  assert.equal(Model.tlsTrustStatus("self-signed"), "SELF-SIGNED TRUST");
+  assert.equal(Model.tlsTrustStatus("custom-ca"), "CUSTOM CA");
+  assert.equal(Model.tlsTrustStatus("system"), "SYSTEM TRUST");
+});
+
 test("validates service links without trusting their schemes, authority or controls", () => {
   for (const value of ["javascript:alert(1)", "file:///etc/passwd", "data:text/plain,x", "https://user:pw@example.test", "http://host:99999/", "http://host/\\evil", "http://host/\nX", "http://host/%zz"]) {
     assert.equal(Model.safeHttpUrl(value), "", value);

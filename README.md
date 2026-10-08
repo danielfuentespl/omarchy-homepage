@@ -33,7 +33,7 @@ Remove a local test copy with `omarchy plugin disable "$plugin_id"`, delete the 
 
 Once the repository is hosted, the normal Git-managed install is `omarchy plugin add https://github.com/danielfuentespl/omarchy-homepage.git --enable`; remove it later with `omarchy plugin remove com.blogvirtualizado.omaops.homepage`.
 
-Set the Homepage address in Omarchy's plugin settings or in the panel's **Configure** form. Use an HTTP(S) address, optionally with a safe path; credentials, query strings and fragments are rejected. **Open Homepage** uses this address. Homepage documents its `base` setting as the document base URL; its current UI calls `/api/services` with a root-relative path, so OmaHomepage addresses the services and MCP APIs at the URL origin (`/api/services` and the configured `mcpPath`). A reverse proxy must route those API paths as Homepage expects; the plugin does not assume the document path is an API prefix. HTTPS certificate checks remain on. For a private CA, set the absolute PEM certificate path in plugin settings. No homelab address is built in.
+Set the Homepage address in Omarchy's plugin settings or in the panel's **Configure** form. Use an HTTP(S) address, optionally with a safe path; credentials, query strings and fragments are rejected. **Open Homepage** uses this address. Homepage documents its `base` setting as the document base URL; its current UI calls `/api/services` with a root-relative path, so OmaHomepage addresses the services and MCP APIs at the URL origin (`/api/services` and the configured `mcpPath`). A reverse proxy must route those API paths as Homepage expects; the plugin does not assume the document path is an API prefix. HTTPS certificate checks remain on. In **Configure Homepage**, use **Test connection** to check system trust and inspect a presented certificate. **Import CA certificate** accepts a public PEM CA only after verifying the live server chain and hostname; OmaHomepage copies it into a private, host-scoped directory under `~/.config/omaops/homepage/trust/`. A leaf signed by a private CA cannot be trusted directly. A genuinely self-signed certificate can be trusted only after its signature, hostname and validity are checked and the user confirms its SHA-256 fingerprint. Trust is scoped to the exact Homepage origin. No homelab address is built in.
 
 You can also configure the bar widget from a terminal:
 
@@ -72,7 +72,7 @@ Treat the Homepage MCP token as a broad administrative credential. Homepage docu
 ## Data and security
 
 - curl uses `-q --config -`; generated options and the token are sent through stdin, not command-line arguments or environment variables.
-- Redirects are never followed. HTTPS verifies the system trust store or the explicitly selected CA; there is no insecure TLS mode.
+- Redirects are never followed. HTTPS verifies system trust or an imported CA scoped to the configured origin. Self-signed certificates require explicit, fingerprint-confirmed trust; changed certificates are blocked. There is no insecure TLS mode.
 - API response sizes and displayed fields are bounded. Widget credentials and unknown fields are ignored.
 - Safe HTTP(S) links are opened by Qt without shell command construction.
 - The plugin runs in `omarchy-shell` and is not a sandbox boundary. No Docker socket, SSH, browser cookies, or Homepage credentials are accessed.

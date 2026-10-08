@@ -25,6 +25,10 @@ Item {
   property string mcpPath: String(setting("mcpPath", "/api/mcp") || "/api/mcp")
   property string secretId: String(setting("secretId", "default") || "default").trim() || "default"
   property string caCertPath: String(setting("caCertPath", "") || "").trim()
+  property string tlsTrustMode: String(setting("tlsTrustMode", "system") || "system")
+  property string tlsTrustOrigin: String(setting("tlsTrustOrigin", "") || "").trim().toLowerCase()
+  property string tlsTrustFingerprint: String(setting("tlsTrustFingerprint", "") || "").trim().toLowerCase()
+  readonly property string effectiveCaCertPath: Model.effectiveCaCertPath(baseUrl, caCertPath, tlsTrustOrigin)
   property int refreshIntervalSec: Model.clampSeconds(setting("refreshIntervalSec", 60), 60, 30, 3600)
   property int requestTimeoutMs: Model.clampSeconds(setting("requestTimeoutMs", 8000), 8000, 1000, 30000)
   property int staleAfterSec: Model.clampSeconds(setting("staleAfterSec", 300), 300, 60, 86400)
@@ -47,7 +51,8 @@ Item {
     return JSON.stringify([
       String(setting("baseUrl", "")), String(setting("refreshIntervalSec", 60)),
       String(setting("requestTimeoutMs", 8000)), String(setting("staleAfterSec", 300)),
-      String(setting("caCertPath", "") || ""), String(setting("secretId", "default") || "default"),
+      caCertPath, tlsTrustMode, tlsTrustOrigin, tlsTrustFingerprint,
+      String(setting("secretId", "default") || "default"),
       String(setting("mcpPath", "/api/mcp") || "/api/mcp"), String(boolSetting("editingEnabled", false))
     ]);
   }
@@ -95,7 +100,7 @@ Item {
     mcpClient.check({
       baseUrl: String(setting("baseUrl", "")),
       secretId,
-      caCertPath,
+      caCertPath: effectiveCaCertPath,
       mcpPath,
       editingEnabled,
       requestTimeoutMs
@@ -115,7 +120,7 @@ Item {
       generation: _generation,
       key: configurationKey(),
       baseUrl: endpoint.baseUrl,
-      caCertPath,
+      caCertPath: effectiveCaCertPath,
       timeoutSec: timeout
     };
     _apiCycle = cycle;
@@ -145,7 +150,9 @@ Item {
       apiState = Model.apiState(0, exitCode, services.length > 0,
                                lastSuccessMs ? (Date.now() - lastSuccessMs) / 1000 : 0,
                                staleAfterSec);
-      apiMessage = errorMessage || "Homepage request failed.";
+      apiMessage = errorKind === "tls"
+        ? "TLS certificate not trusted or invalid. Inspect the certificate in Configure Homepage."
+        : errorMessage || "Homepage request failed.";
       return;
     }
     if (statusCode === 401 || statusCode === 403 || (statusCode >= 300 && statusCode < 400)) {

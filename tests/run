@@ -4,4 +4,5 @@ cd "$(dirname "$0")/.."
 for test_file in tests/*.test.js; do
   node "$test_file"
 done
+python3 tests/certificate_helper.test.py
 python3 tests/manifest.test.py

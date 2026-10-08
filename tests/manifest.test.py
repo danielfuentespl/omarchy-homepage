@@ -17,7 +17,8 @@ assert set(manifest["kinds"]) == {"service", "bar-widget"}
 for entry in ("BarWidget.qml", "Panel.qml", "Service.qml", "HomepageApi.js", "CurlTransport.qml", "CurlConfig.js",
               "McpClient.qml", "McpClient.js", "Model.js", "ServiceHost.js", "README.md",
               "LICENSE", "CHANGELOG.md", "docs/SECURITY.md", "docs/preview.svg", "docs/preview.png",
-              "DEVELOPMENT.md", "scripts/store-secret"):
+              "DEVELOPMENT.md", "scripts/store-secret", "scripts/certificate_helper.py",
+              "tests/certificate_helper.test.py"):
     assert (root / entry).is_file(), f"missing {entry}"
 workflow = (root / ".github/workflows/validate.yml").read_text(encoding="utf-8")
 assert re.search(r"(?m)^permissions:\n  contents: read$", workflow), "CI repository permissions must remain read-only"
@@ -28,10 +29,12 @@ assert re.search(r"(?m)^\s+persist-credentials: false$", workflow), "checkout cr
 assert re.search(r"(?m)^        run: \.\/tests\/run$", workflow), "CI should run the synthetic test suite"
 assert not re.search(r"(?im)^\s+(?:uses|run): .*?(?:release|upload-artifact|publish)", workflow), "CI must not publish or create releases"
 keys = {item["key"] for item in manifest["barWidget"]["schema"]}
-assert keys == {"baseUrl", "refreshIntervalSec", "requestTimeoutMs", "staleAfterSec", "caCertPath", "secretId", "editingEnabled", "mcpPath"}
+assert keys == {"baseUrl", "refreshIntervalSec", "requestTimeoutMs", "staleAfterSec", "caCertPath", "tlsTrustMode",
+                "tlsTrustOrigin", "tlsTrustFingerprint", "secretId", "editingEnabled", "mcpPath"}
 settings = {item["key"]: item for item in manifest["barWidget"]["schema"]}
 assert settings["baseUrl"]["defaultValue"] == ""
 assert settings["editingEnabled"]["defaultValue"] is False
+assert settings["tlsTrustMode"]["defaultValue"] == "system"
 assert manifest["barWidget"]["defaults"]["editingEnabled"] is False
 assert "Homepage's MCP token" in manifest["barWidget"]["disclaimer"]
 print("manifest, schema and repository files: OK")
