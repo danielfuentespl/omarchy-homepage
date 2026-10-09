@@ -39,6 +39,27 @@ class CertificateHelperTests(unittest.TestCase):
             "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n", encoding="ascii")
         openssl("x509", "-req", "-in", str(cls.csr), "-CA", str(cls.ca), "-CAkey", str(cls.ca_key),
                 "-CAcreateserial", "-out", str(cls.leaf), "-days", "3", "-extfile", str(cls.root / "leaf.ext"))
+        cls.wildcard_key = cls.root / "wildcard.key"
+        cls.wildcard_csr = cls.root / "wildcard.csr"
+        cls.wildcard_leaf = cls.root / "wildcard.pem"
+        openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", str(cls.wildcard_key),
+                "-out", str(cls.wildcard_csr), "-subj", "/CN=*.example.test")
+        (cls.root / "wildcard.ext").write_text(
+            "subjectAltName=DNS:*.example.test\nbasicConstraints=critical,CA:FALSE\n"
+            "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n", encoding="ascii")
+        openssl("x509", "-req", "-in", str(cls.wildcard_csr), "-CA", str(cls.ca), "-CAkey", str(cls.ca_key),
+                "-CAcreateserial", "-out", str(cls.wildcard_leaf), "-days", "3",
+                "-extfile", str(cls.root / "wildcard.ext"))
+        cls.ip_key = cls.root / "ip.key"
+        cls.ip_csr = cls.root / "ip.csr"
+        cls.ip_leaf = cls.root / "ip.pem"
+        openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", str(cls.ip_key),
+                "-out", str(cls.ip_csr), "-subj", "/CN=192.0.2.10")
+        (cls.root / "ip.ext").write_text(
+            "subjectAltName=IP:192.0.2.10\nbasicConstraints=critical,CA:FALSE\n"
+            "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n", encoding="ascii")
+        openssl("x509", "-req", "-in", str(cls.ip_csr), "-CA", str(cls.ca), "-CAkey", str(cls.ca_key),
+                "-CAcreateserial", "-out", str(cls.ip_leaf), "-days", "3", "-extfile", str(cls.root / "ip.ext"))
         cls.self_key = cls.root / "self.key"
         cls.self_cert = cls.root / "self.pem"
         openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(cls.self_key),
@@ -128,11 +149,51 @@ class CertificateHelperTests(unittest.TestCase):
         self.assertEqual(wrong["kind"], "CA_FILE_INVALID")
 
     def test_hostname_mismatch_blocks_system_custom_and_self_signed_trust(self):
-        # Use a hostname outside the fixture's DNS suffix to keep this mismatch
-        # unambiguous across OpenSSL versions and wildcard matching rules.
-        result = Cert.evaluate_chain("homepage-mismatch.example.invalid", self.chain(self.leaf), str(self.ca))
-        self.assertEqual(result["kind"], "HOSTNAME_MISMATCH")
-        self.assertFalse(result["ok"])
+        mismatch = "other.example.invalid"
+        for trust_path, chain, ca_file, trusted in (
+            ("custom CA", self.chain(self.leaf), str(self.ca), False),
+            ("system trust", self.chain(self.leaf), None, True),
+            ("self-signed", self.chain(self.self_cert), None, True),
+        ):
+            with self.subTest(trust_path=trust_path), mock.patch.object(
+                Cert, "verify", return_value=(trusted, "")
+            ) as verify:
+                result = Cert.evaluate_chain(mismatch, chain, ca_file)
+                self.assertEqual(result["kind"], "HOSTNAME_MISMATCH")
+                self.assertFalse(result["ok"])
+                self.assertFalse(result.get("trustAvailable", False))
+                verify.assert_not_called()
+
+    def test_dns_hostname_exact_match_and_mismatch(self):
+        exact = Cert.evaluate_chain("homepage.test", self.chain(self.leaf), str(self.ca))
+        self.assertTrue(exact["ok"], exact)
+        mismatch = Cert.evaluate_chain("other.example.invalid", self.chain(self.leaf), str(self.ca))
+        self.assertEqual(mismatch["kind"], "HOSTNAME_MISMATCH")
+        self.assertFalse(mismatch.get("trustAvailable", False))
+
+    def test_wildcard_hostname_matches_one_label_only(self):
+        valid = Cert.evaluate_chain("app.example.test", self.chain(self.wildcard_leaf), str(self.ca))
+        self.assertTrue(valid["ok"], valid)
+        invalid = Cert.evaluate_chain("foo.bar.example.test", self.chain(self.wildcard_leaf), str(self.ca))
+        self.assertEqual(invalid["kind"], "HOSTNAME_MISMATCH")
+        self.assertFalse(invalid.get("trustAvailable", False))
+
+    def test_ip_san_matches_exact_address_only(self):
+        exact = Cert.evaluate_chain("192.0.2.10", self.chain(self.ip_leaf), str(self.ca))
+        self.assertTrue(exact["ok"], exact)
+        mismatch = Cert.evaluate_chain("192.0.2.11", self.chain(self.ip_leaf), str(self.ca))
+        self.assertEqual(mismatch["kind"], "HOSTNAME_MISMATCH")
+        self.assertFalse(mismatch.get("trustAvailable", False))
+
+    def test_trust_leaf_does_not_store_when_certificate_hostname_mismatches(self):
+        cert = pathlib.Path(self.leaf).read_bytes()
+        with mock.patch.object(Cert, "fetch_chain", return_value=[cert]), mock.patch.object(
+            Cert, "store_certificate"
+        ) as stored:
+            with self.assertRaises(Cert.CertificateError) as error:
+                Cert.trust_leaf("https://other.example.invalid", "00" * 32)
+            self.assertEqual(error.exception.code, "HOSTNAME_MISMATCH")
+            stored.assert_not_called()
 
     def test_ca_file_must_be_regular_pem_ca_without_private_key(self):
         data, _ = Cert.ca_file_info(self.ca)

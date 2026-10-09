@@ -149,6 +149,23 @@ def verify(host, leaf, chain, ca_file=None, self_signed=False):
         temporary.cleanup()
 
 
+def verify_hostname(host, leaf):
+    """Verify certificate identity independently of CA trust.
+
+    `openssl x509 -noout -checkhost` can print a mismatch but still exit 0 on
+    OpenSSL 3.0. Trust the presented leaf only for this identity-only check;
+    evaluate_chain() separately validates its actual chain afterwards.
+    """
+    temporary, paths = write_temp_certificates([leaf])
+    try:
+        hostname_option = "-verify_ip" if _is_ip(host) else "-verify_hostname"
+        completed = run(["openssl", "verify", "-partial_chain", "-trusted", str(paths[0]),
+                         hostname_option, host, str(paths[0])])
+        return completed.returncode == 0
+    finally:
+        temporary.cleanup()
+
+
 def ca_file_info(path):
     source = pathlib.Path(path)
     try:
@@ -290,9 +307,7 @@ def evaluate_chain(host, chain, ca_file=None):
             return {"ok": False, "kind": "CERTIFICATE_NOT_YET_VALID", "message": "The server certificate is not valid yet.", **metadata}
         if validity == "CERTIFICATE_EXPIRED":
             return {"ok": False, "kind": "CERTIFICATE_EXPIRED", "message": "The server certificate has expired.", **metadata}
-        hostname_option = "-checkip" if _is_ip(host) else "-checkhost"
-        host_result = run(["openssl", "x509", "-in", str(paths[0]), "-noout", hostname_option, host])
-        if host_result.returncode:
+        if not verify_hostname(host, chain[0]):
             return {"ok": False, "kind": "HOSTNAME_MISMATCH", "message": "The certificate does not match the configured hostname.", **metadata}
         is_self_signed, _ = verify(host, chain[0], chain[1:], self_signed=True)
         is_self_signed = is_self_signed and fields["subject"] == fields["issuer"]
