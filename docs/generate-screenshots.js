@@ -136,6 +136,35 @@ function connected() {
   </main>`;
 }
 
+function tlsTrustedCertificate() {
+  const rows = Model.displayRows(Model.filterGroups(parsed.groups, ""), true, {});
+  const rendered = rows.map(row => row.type === "group"
+    ? `<div class="group-head"><span class="arrow">${row.expanded ? "▾" : "▸"}</span><span>${esc(row.name)} · ${row.count}</span></div>`
+    : `<div class="service"><div class="service-copy"><div class="service-name">${esc(row.service.name)}</div><div class="description">${esc(row.service.description)}</div></div><span class="button">Open</span></div>`).join("");
+  return `<main class="panel">
+    <div class="header"><span>OmaHomepage</span><span class="state">ONLINE</span></div>
+    <div class="address"><span>${esc(fixture.baseUrl)}</span><span>Configure</span></div>
+    <div class="search">Search services…</div>
+    <div class="summary">${Model.countGroups(parsed.groups)} groups · ${Model.countServices(parsed.groups)} services</div>
+    <h2>Configure Homepage</h2>
+    <div class="input">${esc(fixture.baseUrl)}</div>
+    <div class="tls-label">TLS · TRUSTED CERTIFICATE</div>
+    <div class="actions"><span class="button">Test connection</span><span class="button">Inspect certificate</span></div>
+    <div class="notice">curl verified TLS for this certificate. Loading Homepage services…</div>
+    <div class="detail">
+      <div class="key">Hostname</div><div class="value">${esc(cert.host)}</div>
+      <div class="key">Subject</div><div class="value">${esc(cert.subject)}</div>
+      <div class="key">Issuer</div><div class="value">${esc(cert.issuer)}</div>
+      <div class="key">SAN</div><div class="value">${esc(cert.sans.join(", "))}</div>
+      <div class="key">SHA-256</div><div class="value fingerprint">${esc(cert.fingerprint)}</div>
+    </div>
+    <div class="actions"><span class="button secondary">Remove trusted certificate</span></div>
+    <div class="actions"><span class="button">Save address</span><span class="button secondary">Cancel</span></div>
+    ${rendered}
+    <div class="footer"><span class="button">Refresh</span><span></span><span class="button">Open Homepage</span></div>
+  </main>`;
+}
+
 function writeGate({ enabled = false, form = false, restored = false } = {}) {
   const notice = restored ? `<div class="notice">Unsaved service draft restored</div>` : "";
   const editing = `<div class="checkbox-row"><span class="checkbox ${enabled ? "checked" : ""}">${enabled ? "✓" : ""}</span><div><strong>Enable service editing</strong><div class="muted">Homepage MCP write permission must also be enabled.</div></div></div>`;
@@ -186,10 +215,11 @@ Icon: mdi-flask-outline</div>
 
 fs.mkdirSync(output, { recursive: true });
 const screenshots = [
+  ["homepage-online-services.png", page(connected(), "Connected to Homepage"), 720, 900],
   ["tls-certificate-untrusted.png", page(common(), "Private CA detected"), 720, 500],
   ["tls-trust-options.png", page(common({ details: true }), "Inspect and explicitly trust the certificate"), 720, 850],
   ["tls-trust-confirmation.png", page(common({ details: true, dialog: true }), "Confirm the certificate fingerprint"), 720, 850],
-  ["homepage-online-services.png", page(connected(), "Connected to Homepage"), 720, 900],
+  ["tls-trusted-certificate.png", page(tlsTrustedCertificate(), "TLS trusted certificate"), 720, 1120],
   ["mcp-read-only.png", page(writeGate(), "MCP read only"), 720, 760],
   ["mcp-write-enabled.png", page(writeGate({ enabled: true }), "MCP write enabled"), 720, 760],
   ["add-service-form.png", page(writeGate({ enabled: true, form: true }), "Add service form"), 720, 920],

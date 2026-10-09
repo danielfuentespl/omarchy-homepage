@@ -1,10 +1,8 @@
 # OmaHomepage
 
-OmaHomepage is an independent native Omarchy/Quickshell plugin for browsing services from a gethomepage/Homepage dashboard. It includes a bar widget and a service that polls Homepage's `GET /api/services`, lets you search and open service links, and can optionally inspect MCP capabilities and view `services.yaml` through Homepage's read-only MCP API.
+OmaHomepage is a native Omarchy/Quickshell plugin for browsing services from a gethomepage/Homepage dashboard. It provides a bar widget and a service that reads Homepage's `GET /api/services`, lets you search and open service links, and optionally connects to Homepage MCP.
 
-![OmaHomepage preview using fictional service data](docs/preview.png)
-
-Every listed service is marked `UNKNOWN`: Homepage's service API describes configuration and does not establish whether the service backend is reachable. Docker-linked metadata may be displayed when Homepage returns `server` or `container`, but `/api/services` does not identify whether a row came from YAML, Docker, or another source. The plugin does not connect to the Docker socket or run service health probes.
+Every listed service has no claimed health result: Homepage's services API does not establish whether a backend is reachable. Rows with no reliable service status are shown without an invented `ONLINE` or `OFFLINE` state. OmaHomepage does not connect to Docker or probe individual services.
 
 ## Requirements
 
@@ -12,131 +10,170 @@ Every listed service is marked `UNKNOWN`: Homepage's service API describes confi
 
 - Omarchy with native plugin support (Quickshell)
 - Homepage with `GET /api/services` enabled
-- `curl` 8.4 or newer available in `/usr/bin` or `/bin` (the response-size cap must apply to streaming responses)
+- `curl` 8.4 or newer in `/usr/bin` or `/bin`
 - Python 3 and the OpenSSL command-line tools for certificate inspection and private-CA/certificate trust
 
 **Optional MCP**
 
-- A compatible Secret Service provider and `secret-tool` to store and retrieve the Homepage MCP token. `secret-tool` is also used by `scripts/store-secret`.
+- Homepage MCP, a compatible Secret Service provider, and `secret-tool` for storing and retrieving the MCP token. `secret-tool` is also used by `scripts/store-secret`.
 
 **Tests and screenshot generation only**
 
-- Node.js for the JavaScript test suites and screenshot generator; it is not a plugin runtime dependency
-- OpenSSL and Python 3 are also used by certificate tests
+- Node.js for JavaScript tests and screenshot generation; it is not required to run the plugin
+- Python 3 and OpenSSL are also used by certificate tests
 
-## Install and configure
+## Install with Omarchy
 
-For a local checkout, copy the plugin directory into Omarchy's plugin directory, then rescan and add its bar widget. Replace `<checkout>` with this repository's path; the guard avoids overwriting an existing installation.
-
-```sh
-checkout=/path/to/omarchy-homepage
-plugin_id=com.blogvirtualizado.omaops.homepage
-plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$plugin_id"
-test ! -e "$plugin_dir" || { echo "Plugin directory already exists: $plugin_dir" >&2; exit 1; }
-mkdir -p "$(dirname "$plugin_dir")"
-mkdir -p "$plugin_dir"
-tar --exclude=.git -C "$checkout" -cf - . | tar -C "$plugin_dir" -xf -
-omarchy-shell shell rescanPlugins
-omarchy bar put "$plugin_id"
-```
-
-Remove a local test copy with `omarchy plugin disable "$plugin_id"`, delete the exact `$plugin_dir` directory, and run `omarchy-shell shell rescanPlugins` again.
-
-Once the repository is hosted, the normal Git-managed install is `omarchy plugin add https://github.com/danielfuentespl/omarchy-homepage.git --enable`; remove it later with `omarchy plugin remove com.blogvirtualizado.omaops.homepage`.
-
-Set the Homepage address in Omarchy's plugin settings or in the panel's **Configure** form. Use an HTTP(S) address, optionally with a safe path; credentials, query strings and fragments are rejected. **HTTP is allowed only for unauthenticated, read-only Homepage use**: with no MCP token configured, an address such as `http://homepage.local:3000` can list, search, and open services. **MCP requires HTTPS with valid TLS**, and HTTP plus an MCP token is always rejected. HTTPS can use system trust, an imported CA, or an explicitly trusted certificate; certificate verification is never disabled. **Open Homepage** uses this address. Homepage documents its `base` setting as the document base URL; its current UI calls `/api/services` with a root-relative path, so OmaHomepage addresses the services and MCP APIs at the URL origin (`/api/services` and the configured `mcpPath`). A reverse proxy must route those API paths as Homepage expects; the plugin does not assume the document path is an API prefix. HTTPS certificate checks remain on. In **Configure Homepage**, use **Test connection** to check system trust and inspect a presented certificate. For an untrusted but hostname-valid certificate, **Trust this certificate** confirms and trusts only that exact public leaf; OmaHomepage first tests a real `/api/services` request with curl and keeps the trust only if TLS succeeds. A renewed leaf requires another confirmation. **Import CA certificate** remains available for a public PEM CA after validating the live server chain and hostname; it continues to trust certificates issued by that CA. Both trust methods are scoped to the exact Homepage origin and stored in a private directory under `~/.config/omaops/homepage/trust/`. No homelab address is built in.
-
-## Screenshots
-
-### Private CA detected
-
-![Fictional private CA detected by OmaHomepage](docs/screenshots/tls-certificate-untrusted.png)
-
-### Inspect and explicitly trust the certificate
-
-![Fictional certificate details and trust options](docs/screenshots/tls-trust-options.png)
-
-### Confirm the certificate fingerprint
-
-![Fictional certificate fingerprint confirmation](docs/screenshots/tls-trust-confirmation.png)
-
-### Connected to Homepage
-
-![OmaHomepage online with fictional groups and services](docs/screenshots/homepage-online-services.png)
-
-### MCP read-only
-
-![Configure with MCP read-only and service editing unchecked](docs/screenshots/mcp-read-only.png)
-
-### MCP write enabled
-
-![Service editing explicitly enabled with Add service available](docs/screenshots/mcp-write-enabled.png)
-
-### Add service form
-
-![Fictional Add service form](docs/screenshots/add-service-form.png)
-
-### Confirm before writing
-
-![Fictional service summary awaiting explicit confirmation](docs/screenshots/add-service-confirmation.png)
-
-### Unsaved draft restored
-
-![Fictional Add service draft restored after reopening the panel](docs/screenshots/add-service-draft-restored.png)
-
-You can also configure the bar widget from a terminal:
+When the plugin repository is published, install it with the official Omarchy plugin commands. Replace `<repository-url>` with the repository URL provided by the project; no public URL is assumed here.
 
 ```sh
-omarchy bar set com.blogvirtualizado.omaops.homepage baseUrl "https://homepage.example.com"
+omarchy plugin add <repository-url> --yes
+omarchy plugin enable com.blogvirtualizado.omaops.homepage --section right
 ```
 
-The panel refreshes `/api/services`, filters by group/name/description and opens safe HTTP(S) links through the desktop. The API connection state says whether Homepage replied; each service status stays `UNKNOWN`.
-
-If Homepage has `HOMEPAGE_AUTH_ENABLED=true`, `/api/services` requires the Homepage browser session. The MCP bearer token does not authorize this API endpoint, so the service list may show **AUTH REQUIRED** even when MCP is authenticated. This release does not ask for or persist a Homepage session cookie.
-
-## Optional MCP access
-
-MCP is optional: browsing, searching, and opening Homepage services use `/api/services` and continue to work when MCP is disabled or unavailable. Homepage MCP requires Homepage v2.0.0 or newer; OmaHomepage's MCP integration has been validated with Homepage v2.4.0. If `/api/mcp` returns 404, OmaHomepage reports **MCP UNAVAILABLE** while keeping normal Homepage navigation available. Configure `HOMEPAGE_MCP_ENABLED=true` in Homepage and provide a token supported by Homepage. OmaHomepage uses the configured HTTPS origin plus `mcpPath`; it never follows redirects or sends the token over HTTP. It stores the token in Secret Service under `application=omaops-homepage` and `instance=<secretId>`. The helper accepts the token through a no-echo prompt:
+`plugin add` installs the plugin. `plugin enable` activates it, and `--section right` places its widget in the right side of the bar. To use the interactive install flow, omit `--yes`:
 
 ```sh
-./scripts/store-secret default
+omarchy plugin add <repository-url>
+omarchy plugin enable com.blogvirtualizado.omaops.homepage --section right
 ```
 
-After authentication, OmaHomepage requests `tools/list` and checks Homepage's effective `services.yaml` permission. It remains **MCP READ ONLY** unless both independent gates are enabled: server-side `HOMEPAGE_MCP_ALLOW_WRITE=true` and the explicit **Enable service editing** checkbox in Configure. The checkbox is an in-memory session authorization and is never stored in plugin settings. It normally starts off; while an unsaved draft is active, the authorization and form survive closing or recreating the panel, and reset when the draft is discarded, the service is added, its Homepage/TLS identity changes, or Omarchy Shell restarts. When both gates are verified, the panel exposes only a confirmation-based **Add service** form for group, name, HTTP(S) URL, optional description and icon. It rejects widgets, arbitrary YAML, credentials, Docker server/container fields and other configuration files. Each add reads `services.yaml` first, submits one add request without retry, and reads the file back to verify the result. Ambiguous requests are reported as **WRITE OUTCOME UNKNOWN** and only read back. The two gates do not enable a raw YAML editor; **View services.yaml** remains read-only, asks first, displays the exact content locally, and clears it from panel memory when the view closes.
+## First setup
 
-While completing **Add service**, switching temporarily to another application preserves the unsaved draft for the current Omarchy Shell session. Reopen OmaHomepage to restore its fields; **Cancel** discards it. If the form is partly below the visible area, scroll down slightly inside the panel. **Continue** shows a summary; the MCP write is sent only after explicitly choosing **Add service** in that confirmation.
+1. Open OmaHomepage from its bar widget.
+2. Choose **Configure**.
+3. Enter the Homepage address, for example:
+   - HTTP without an MCP token: `http://homepage.example.internal:3000`
+   - HTTPS: `https://homepage.example.internal`
+4. For HTTPS, choose **Test connection** to inspect the presented TLS certificate and verify the connection path. For plain HTTP there is no TLS certificate to inspect; check for `ONLINE` and use **Refresh** to confirm the service listing.
+5. Choose **Save address**.
 
-To remove the stored token:
+`ONLINE` means OmaHomepage can read Homepage's service API. `TLS · UNTRUSTED` means the HTTPS certificate is not trusted yet and needs inspection and an explicit trust choice, or a valid CA import. `TLS · TRUSTED CERTIFICATE` means the exact confirmed server certificate is in use for this origin. A connection error means Homepage did not return usable service data; check the address, network reachability, and TLS state shown in Configure.
 
-```sh
-secret-tool clear application omaops-homepage instance default
-```
+![Connected to Homepage with fictional groups and services](docs/screenshots/homepage-online-services.png)
 
-Editing existing services is planned for a later release. The Homepage API does not reliably identify whether each returned service came from `services.yaml` or Docker discovery. OmaHomepage therefore does not claim Docker provenance or offer per-row edit controls; Docker `server`/`container` hints may be shown when the API returns them.
+## TLS and private certificates
 
-### MCP token scope
+If the server certificate is valid for the system trust store, no import or manual trust is needed. OmaHomepage uses normal system TLS validation.
 
-Treat the Homepage MCP token as a sensitive credential. Homepage may expose configured credentials through MCP. Leave **Enable service editing** unchecked unless you intentionally want the limited Add service form and have enabled Homepage's matching server-side write gate; protect the token and Homepage instance.
-## Data and security
+OmaHomepage never disables TLS verification. It does not use `-k` or `--insecure`, and it has no “ignore TLS” option. Do not use insecure curl commands as a workaround.
 
-- curl uses `-q --config -`; generated options and the token are sent through stdin, not command-line arguments or environment variables.
-- Redirects are never followed. HTTPS verifies system trust, an imported CA, or an explicitly confirmed leaf certificate scoped to the configured origin. Leaf trust is tested through curl against `/api/services` before saving and must be confirmed again after the certificate changes. There is no insecure TLS mode.
-- API response sizes and displayed fields are bounded. Widget credentials and unknown fields are ignored.
-- Safe HTTP(S) links are opened by Qt without shell command construction.
-- The plugin runs in `omarchy-shell` and is not a sandbox boundary. No Docker socket, SSH, browser cookies, or Homepage credentials are accessed.
-- See [Security notes](docs/SECURITY.md).
+### Option A: Trust this certificate
 
-## Development
+Use this for a self-signed certificate or a certificate from a private CA unknown to the system when you want to approve only the exact certificate currently presented by Homepage.
 
-Run checks on a machine with Omarchy installed:
+1. Open **Configure** and enter the HTTPS address.
+2. Choose **Test connection**. If the state is **TLS · UNTRUSTED**, choose **Inspect certificate**.
+3. Check the hostname, subject, issuer, SAN, validity dates, and SHA-256 fingerprint.
+4. Choose **Trust this certificate**, review the confirmation, and approve it explicitly.
+5. OmaHomepage saves only the public certificate for this Homepage origin and verifies it with a real API request. The state should become **TLS · TRUSTED CERTIFICATE**; then wait for services to load.
+6. If services do not appear automatically, choose **Refresh**.
 
-```sh
-./tests/run
-omarchy plugin validate .
-git diff --check
-```
+![Untrusted private certificate detected](docs/screenshots/tls-certificate-untrusted.png)
 
-Tests use synthetic data, an in-memory Homepage MCP fixture, and temporary HTTP/TLS servers with a temporary CA; they do not contact your Homepage instance. The runner prints each suite's pass/skip counts. Network tests need local loopback access and explicitly skip when a local sandbox blocks it. GitHub Actions sets `OMA_HOMEPAGE_REQUIRE_INTEGRATION=1`, which makes any required loopback integration skip fail the test run. See [Development](DEVELOPMENT.md).
+![Inspect certificate details and available trust controls](docs/screenshots/tls-trust-options.png)
+
+![Explicit confirmation showing the fictional certificate fingerprint](docs/screenshots/tls-trust-confirmation.png)
+
+![TLS trusted certificate, successful curl verification, and fictional certificate details](docs/screenshots/tls-trusted-certificate.png)
+
+Trust is bound to the configured origin and exact leaf certificate. A renewed or otherwise changed certificate requires inspection and approval again. **Remove trusted certificate** removes OmaHomepage's explicit trust so the next connection uses normal system trust.
+
+
+### Option B: Import CA certificate
+
+Use this when you control a private CA and want to trust its valid renewals for this Homepage origin.
+
+1. Obtain the CA's **public PEM certificate**.
+2. In Configure, enter its absolute file path.
+3. Choose **Import CA certificate**. OmaHomepage validates that the file contains a public CA certificate and that the CA verifies the live server certificate and hostname.
+4. Choose **Test connection** again if needed, then save the Homepage address.
+
+Never import a private key, a `rootCA-key.pem` file, or a PEM containing `PRIVATE KEY`. Import only the public CA certificate. CA trust is scoped to the configured origin and does not modify the system trust store.
+
+### What the connection controls do
+
+- **Test connection** inspects the current HTTPS certificate and checks the connection path. Certificate inspection applies only to HTTPS; a plain HTTP address has no TLS certificate.
+- **Save address** stores the configured Homepage URL and starts loading its services.
+- **Refresh** makes a new read-only request to Homepage and updates the visible groups and services. When MCP is enabled, it may also refresh MCP availability/capabilities using read-only requests. It does not change TLS trust, modify Homepage configuration, write `services.yaml`, or restart services.
+
+Use **Refresh** after changing Homepage externally, after resolving a TLS issue if the list has not appeared, or whenever you want the displayed list updated. It is not normally necessary immediately after a successful connection because OmaHomepage loads services automatically.
+
+## Use without MCP
+
+MCP is optional. Without an MCP token, OmaHomepage uses `/api/services` and can:
+
+- List groups and services
+- Search by service name, description, or group
+- Open service links and **Open Homepage**
+- Refresh the displayed service list
+
+HTTP is allowed only for this unauthenticated, read-only usage without an MCP token. If Homepage itself requires a browser login (`HOMEPAGE_AUTH_ENABLED=true`), its API may return **AUTH REQUIRED**: the MCP token does not authenticate `/api/services`, and OmaHomepage does not request or store a Homepage browser cookie.
+
+## Optional MCP read-only access
+
+Homepage MCP requires Homepage 2.0.0 or newer; OmaHomepage has been validated with Homepage 2.4.0. MCP is independent of normal service browsing.
+
+1. Enable MCP on the Homepage server with `HOMEPAGE_MCP_ENABLED=true`, following Homepage's own configuration instructions.
+2. If using a token, create it according to Homepage's instructions and keep it secret. Never put a real token in documentation, screenshots, shell history, or plugin settings.
+3. Configure a valid HTTPS address in OmaHomepage. **MCP and MCP tokens require HTTPS with successful TLS validation**; HTTP plus a token is always rejected.
+4. Store the token in Secret Service. With `secret-tool` installed, the plugin helper prompts without echoing the token:
+
+   ```sh
+   "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/com.blogvirtualizado.omaops.homepage/scripts/store-secret" default
+   ```
+
+5. Open OmaHomepage. With the token authenticated, the status reports **MCP READ ONLY** unless both the server-side write capability and the local editing permission are enabled.
+6. Choose **View services.yaml** to inspect it read-only. OmaHomepage warns first because the file may contain sensitive values; the content is shown locally and is not persisted by the plugin.
+
+![MCP configured read-only with editing disabled](docs/screenshots/mcp-read-only.png)
+
+## Add a service with MCP write
+
+MCP write is disabled by default and requires both independent permissions:
+
+1. On Homepage, enable `HOMEPAGE_MCP_ALLOW_WRITE=true` as well as `HOMEPAGE_MCP_ENABLED=true`.
+2. In OmaHomepage Configure, explicitly select **Enable service editing**. This local permission is temporary and is not stored in plugin settings.
+3. When the server confirms write capability, OmaHomepage shows **MCP WRITE ENABLED** and **+ Add service**.
+4. Open **+ Add service** and fill in **Group**, **Service name**, **URL**, optional **Description**, and optional **Icon**.
+5. Choose **Continue** and review the summary.
+6. Choose **Add service** in the confirmation to send the write.
+
+**Continue does not write anything.** The service is written only after the explicit confirmation, then OmaHomepage reads `services.yaml` back to verify the result. OmaHomepage offers this constrained Add service operation only; it is not a general YAML editor and it does not offer arbitrary YAML editing.
+
+![MCP write explicitly enabled and Add service available](docs/screenshots/mcp-write-enabled.png)
+
+![Add service form with fictional data](docs/screenshots/add-service-form.png)
+
+![Summary and explicit Add service confirmation](docs/screenshots/add-service-confirmation.png)
+
+If a service draft is in progress and you switch to Firefox, Zen, or another application, returning to OmaHomepage during the same Omarchy Shell session restores the draft and its temporary editing authorization. The draft exists only in memory; it is not saved to disk. **Cancel** discards it. Adding the service successfully also clears it. Restarting Omarchy Shell clears the session state.
+
+![Fictional unsaved service draft restored in the current shell session](docs/screenshots/add-service-draft-restored.png)
+
+With long service lists, Configure or Add service can sit partly below the visible panel area. Scroll inside the panel with the mouse wheel, touchpad, or scrollbar to reach the rest of the form. This is expected when the content is taller than the viewport.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| **TLS · UNTRUSTED** | Inspect the hostname, validity, issuer, and fingerprint. Use **Trust this certificate** for the exact leaf or **Import CA certificate** with the public CA PEM. |
+| Homepage does not load after trusting | Wait a few seconds for the API request. If groups and services still do not appear, choose **Refresh**. |
+| **MCP UNAVAILABLE** | Check that Homepage is version 2.0.0 or newer and `HOMEPAGE_MCP_ENABLED=true`. Normal browsing can still work without MCP. |
+| **MCP READ ONLY** when you want to add a service | Check server-side `HOMEPAGE_MCP_ALLOW_WRITE=true`, token authentication, HTTPS, and the local **Enable service editing** checkbox. |
+| **+ Add service** is not visible | Enable service editing after server write capability is confirmed. With a long list, scroll inside the panel. |
+| Services look out of date | Choose **Refresh**. |
+| Homepage certificate changed | Inspect the new certificate and explicitly approve it again only if you trust the change. |
+| Connection error | Check the URL, network path, Homepage API access, and—when using HTTPS—the certificate state. |
+
+## Security and limitations
+
+- curl uses `-q --config -`; request configuration and tokens are sent through stdin, not process arguments or environment variables.
+- Redirects are never followed. TLS verification is always enabled; custom CA or leaf trust is limited to the configured origin.
+- Service responses and displayed fields are bounded. Service status is not inferred from configuration metadata.
+- Safe HTTP(S) links open through Qt without shell command construction.
+- The plugin runs inside `omarchy-shell` and is not a sandbox boundary. It does not use a Docker socket, SSH, browser cookies, or Homepage session credentials.
+- See [Security notes](docs/SECURITY.md) and [Development](DEVELOPMENT.md).
 
 ## Project
 
