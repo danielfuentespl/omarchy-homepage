@@ -128,7 +128,9 @@ class CertificateHelperTests(unittest.TestCase):
         self.assertEqual(wrong["kind"], "CA_FILE_INVALID")
 
     def test_hostname_mismatch_blocks_system_custom_and_self_signed_trust(self):
-        result = Cert.evaluate_chain("other.homepage.test", self.chain(self.leaf), str(self.ca))
+        # Use a hostname outside the fixture's DNS suffix to keep this mismatch
+        # unambiguous across OpenSSL versions and wildcard matching rules.
+        result = Cert.evaluate_chain("homepage-mismatch.example.invalid", self.chain(self.leaf), str(self.ca))
         self.assertEqual(result["kind"], "HOSTNAME_MISMATCH")
         self.assertFalse(result["ok"])
 
