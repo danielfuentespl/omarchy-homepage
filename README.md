@@ -24,17 +24,17 @@ Every listed service has no claimed health result: Homepage's services API does 
 
 ## Install with Omarchy
 
-When the plugin repository is published, install it with the official Omarchy plugin commands. Replace `<repository-url>` with the repository URL provided by the project; no public URL is assumed here.
+Install OmaHomepage from its public GitHub repository with the official Omarchy plugin commands:
 
 ```sh
-omarchy plugin add <repository-url> --yes
+omarchy plugin add https://github.com/danielfuentespl/omarchy-homepage --yes
 omarchy plugin enable com.blogvirtualizado.omaops.homepage --section right
 ```
 
 `plugin add` installs the plugin. `plugin enable` activates it, and `--section right` places its widget in the right side of the bar. To use the interactive install flow, omit `--yes`:
 
 ```sh
-omarchy plugin add <repository-url>
+omarchy plugin add https://github.com/danielfuentespl/omarchy-homepage
 omarchy plugin enable com.blogvirtualizado.omaops.homepage --section right
 ```
 
@@ -112,7 +112,7 @@ HTTP is allowed only for this unauthenticated, read-only usage without an MCP to
 
 ## Optional MCP read-only access
 
-Homepage MCP requires Homepage 2.0.0 or newer; OmaHomepage has been validated with Homepage 2.4.0. MCP is independent of normal service browsing.
+Homepage MCP requires Homepage v2.0.0 or newer; OmaHomepage has been validated with Homepage 2.4.0. MCP is independent of normal service browsing.
 
 1. Enable MCP on the Homepage server with `HOMEPAGE_MCP_ENABLED=true`, following Homepage's own configuration instructions.
 2. If using a token, create it according to Homepage's instructions and keep it secret. Never put a real token in documentation, screenshots, shell history, or plugin settings.
