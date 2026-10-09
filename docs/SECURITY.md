@@ -4,6 +4,8 @@ OmaHomepage is an independent client running inside `omarchy-shell`; it does not
 
 ## Network requests and display
 
+Plain HTTP is allowed only for read-only Homepage browsing when no MCP token is configured. It can list, search, and open services (for example, `http://homepage.local:3000`). MCP credentials always require HTTPS with successful TLS verification; HTTP plus an MCP token is rejected. HTTPS may use system trust, an imported CA, or an explicitly confirmed certificate. TLS verification is never disabled.
+
 - The read-only path requests only `<baseUrl>/api/services`; optional read-only MCP uses `<origin><mcpPath>`.
 - curl 8.4 or newer is invoked with `-q` first and `--config -`; generated URL, token and request body travel via stdin. The process receives a minimal environment. `--max-filesize` aborts oversized transfers, including chunked responses.
 - Redirects are not followed. TLS verification is always enabled. Custom CAs are imported only after they validate the presented chain and hostname, then are scoped to the exact configured origin. An untrusted leaf, whether self-signed or issued by a private CA, can be trusted only after its validity and hostname pass checks and the user confirms its SHA-256 fingerprint. OmaHomepage stores only that public leaf and validates it with the normal curl transport against `/api/services` before saving the plugin setting; if curl rejects it as a trust anchor, the file is removed and the user is directed to import the issuing CA. A changed leaf remains blocked until a separate confirmation and curl verification. There is no `--insecure` option.

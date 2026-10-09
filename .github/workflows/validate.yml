@@ -17,5 +17,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Run synthetic checks
+      - name: Run checks (require loopback integrations)
+        env:
+          OMA_HOMEPAGE_REQUIRE_INTEGRATION: "1"
         run: ./tests/run

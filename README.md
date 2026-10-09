@@ -8,10 +8,21 @@ Every listed service is marked `UNKNOWN`: Homepage's service API describes confi
 
 ## Requirements
 
+**Runtime**
+
 - Omarchy with native plugin support (Quickshell)
 - Homepage with `GET /api/services` enabled
 - `curl` 8.4 or newer available in `/usr/bin` or `/bin` (the response-size cap must apply to streaming responses)
-- For optional MCP read-only access: Homepage MCP enabled, a user-created MCP token, `secret-tool`, and a Secret Service provider
+- Python 3 and the OpenSSL command-line tools for certificate inspection and private-CA/certificate trust
+
+**Optional MCP**
+
+- A compatible Secret Service provider and `secret-tool` to store and retrieve the Homepage MCP token. `secret-tool` is also used by `scripts/store-secret`.
+
+**Tests and screenshot generation only**
+
+- Node.js for the JavaScript test suites and screenshot generator; it is not a plugin runtime dependency
+- OpenSSL and Python 3 are also used by certificate tests
 
 ## Install and configure
 
@@ -33,7 +44,7 @@ Remove a local test copy with `omarchy plugin disable "$plugin_id"`, delete the 
 
 Once the repository is hosted, the normal Git-managed install is `omarchy plugin add https://github.com/danielfuentespl/omarchy-homepage.git --enable`; remove it later with `omarchy plugin remove com.blogvirtualizado.omaops.homepage`.
 
-Set the Homepage address in Omarchy's plugin settings or in the panel's **Configure** form. Use an HTTP(S) address, optionally with a safe path; credentials, query strings and fragments are rejected. **Open Homepage** uses this address. Homepage documents its `base` setting as the document base URL; its current UI calls `/api/services` with a root-relative path, so OmaHomepage addresses the services and MCP APIs at the URL origin (`/api/services` and the configured `mcpPath`). A reverse proxy must route those API paths as Homepage expects; the plugin does not assume the document path is an API prefix. HTTPS certificate checks remain on. In **Configure Homepage**, use **Test connection** to check system trust and inspect a presented certificate. For an untrusted but hostname-valid certificate, **Trust this certificate** confirms and trusts only that exact public leaf; OmaHomepage first tests a real `/api/services` request with curl and keeps the trust only if TLS succeeds. A renewed leaf requires another confirmation. **Import CA certificate** remains available for a public PEM CA after validating the live server chain and hostname; it continues to trust certificates issued by that CA. Both trust methods are scoped to the exact Homepage origin and stored in a private directory under `~/.config/omaops/homepage/trust/`. No homelab address is built in.
+Set the Homepage address in Omarchy's plugin settings or in the panel's **Configure** form. Use an HTTP(S) address, optionally with a safe path; credentials, query strings and fragments are rejected. **HTTP is allowed only for unauthenticated, read-only Homepage use**: with no MCP token configured, an address such as `http://homepage.local:3000` can list, search, and open services. **MCP requires HTTPS with valid TLS**, and HTTP plus an MCP token is always rejected. HTTPS can use system trust, an imported CA, or an explicitly trusted certificate; certificate verification is never disabled. **Open Homepage** uses this address. Homepage documents its `base` setting as the document base URL; its current UI calls `/api/services` with a root-relative path, so OmaHomepage addresses the services and MCP APIs at the URL origin (`/api/services` and the configured `mcpPath`). A reverse proxy must route those API paths as Homepage expects; the plugin does not assume the document path is an API prefix. HTTPS certificate checks remain on. In **Configure Homepage**, use **Test connection** to check system trust and inspect a presented certificate. For an untrusted but hostname-valid certificate, **Trust this certificate** confirms and trusts only that exact public leaf; OmaHomepage first tests a real `/api/services` request with curl and keeps the trust only if TLS succeeds. A renewed leaf requires another confirmation. **Import CA certificate** remains available for a public PEM CA after validating the live server chain and hostname; it continues to trust certificates issued by that CA. Both trust methods are scoped to the exact Homepage origin and stored in a private directory under `~/.config/omaops/homepage/trust/`. No homelab address is built in.
 
 ## Screenshots
 
@@ -125,7 +136,7 @@ omarchy plugin validate .
 git diff --check
 ```
 
-Tests use synthetic data, an in-memory Homepage MCP fixture, and temporary HTTP/TLS servers with a temporary CA; they do not contact your Homepage instance. The runner prints each suite's pass/skip counts. Network tests need local loopback access and explicitly skip when a local sandbox blocks it; CI fails if those integration tests cannot run. See [Development](DEVELOPMENT.md).
+Tests use synthetic data, an in-memory Homepage MCP fixture, and temporary HTTP/TLS servers with a temporary CA; they do not contact your Homepage instance. The runner prints each suite's pass/skip counts. Network tests need local loopback access and explicitly skip when a local sandbox blocks it. GitHub Actions sets `OMA_HOMEPAGE_REQUIRE_INTEGRATION=1`, which makes any required loopback integration skip fail the test run. See [Development](DEVELOPMENT.md).
 
 ## Project
 

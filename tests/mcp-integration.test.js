@@ -35,7 +35,7 @@ async function listen(t, server, cert, options = {}) {
     });
   } catch (error) {
     if (error && error.code === "EPERM") {
-      if (process.env.CI) throw new Error("CI must permit temporary loopback listeners for Homepage MCP integration tests");
+      if (process.env.CI || process.env.OMA_HOMEPAGE_REQUIRE_INTEGRATION === "1") throw new Error("CI must permit temporary loopback listeners for Homepage MCP integration tests");
       t.skip("sandbox blocks temporary loopback servers"); return null;
     }
     throw error;
@@ -47,7 +47,7 @@ async function listen(t, server, cert, options = {}) {
   });
   if (loopbackAvailable === undefined) loopbackAvailable = probe.status === 0;
   if (!loopbackAvailable) {
-    if (process.env.CI) throw new Error("CI must permit connections to temporary Homepage fixture servers");
+    if (process.env.CI || process.env.OMA_HOMEPAGE_REQUIRE_INTEGRATION === "1") throw new Error("CI must permit connections to temporary Homepage fixture servers");
     t.skip("sandbox blocks connections to temporary loopback servers"); return null;
   }
   return { base, ...options };

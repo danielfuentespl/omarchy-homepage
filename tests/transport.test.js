@@ -63,7 +63,7 @@ async function startServer(t, server, protocol = "http") {
   } catch (error) {
     if (error && error.code === "EPERM") {
       loopbackAvailable = false;
-      if (process.env.CI) throw new Error("CI must permit temporary loopback listeners for transport integration tests");
+      if (process.env.CI || process.env.OMA_HOMEPAGE_REQUIRE_INTEGRATION === "1") throw new Error("CI must permit temporary loopback listeners for transport integration tests");
       t.skip("this sandbox blocks temporary loopback listeners; CI runs transport integration checks");
       return "";
     }
@@ -76,7 +76,7 @@ async function startServer(t, server, protocol = "http") {
   });
   if (loopbackAvailable === undefined) loopbackAvailable = probe.status === 0;
   if (!loopbackAvailable) {
-    if (process.env.CI) throw new Error("CI must permit connections to temporary loopback servers for transport integration tests");
+    if (process.env.CI || process.env.OMA_HOMEPAGE_REQUIRE_INTEGRATION === "1") throw new Error("CI must permit connections to temporary loopback servers for transport integration tests");
     t.skip("this sandbox blocks connections to temporary loopback servers; CI runs integration checks");
     return "";
   }

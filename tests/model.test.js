@@ -16,7 +16,7 @@ test("normalizes an HTTP(S) Homepage address without credentials or query", () =
 });
 
 test("custom trust is limited to the exact configured Homepage origin", () => {
-  const path = "/home/dani/.config/omaops/homepage/trust/home.pem";
+  const path = "/home/testuser/.config/omaops/homepage/trust/home.pem";
   assert.equal(Model.effectiveCaCertPath("https://homepage.lab.local", path, "https://homepage.lab.local"), path);
   assert.equal(Model.effectiveCaCertPath("https://other.lab.local", path, "https://homepage.lab.local"), "");
   assert.equal(Model.effectiveCaCertPath("https://homepage.lab.local:8443", path, "https://homepage.lab.local"), "");
