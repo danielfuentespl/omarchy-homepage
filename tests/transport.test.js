@@ -7,18 +7,18 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { runCurl } = require("./run-curl.js");
 const Curl = require("../CurlConfig.js");
 const Model = require("../Model.js");
 let loopbackAvailable;
 
-function curl(url, options = {}, extraEnv = {}) {
+async function curl(url, options = {}, extraEnv = {}) {
   const marker = "OMAHP_TEST";
   const built = Curl.buildRequest({ method: options.method || "GET", url, timeoutSec: 3,
     maxBytes: options.maxBytes, caCertPath: options.caCertPath, token: options.token, body: options.body }, marker);
   assert.equal(built.ok, true, built.error);
-  return spawnSync("curl", Curl.curlArguments(), {
+  return runCurl(Curl.curlArguments(), {
     input: built.text,
-    encoding: "utf8",
     env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", LC_ALL: "C", ...extraEnv }
   });
 }
@@ -54,7 +54,7 @@ test("uses only a verified custom CA option and never enables insecure TLS", () 
     caCertPath: "/tmp/ca.pem", token: "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6", body: "{}" }, "OMAHP_CA_HTTP").ok, false);
 });
 
-async function startServer(t, server, protocol = "http") {
+async function startServer(t, server, protocol = "http", caCertPath = "") {
   try {
     await new Promise((resolve, reject) => {
       server.once("error", reject);
@@ -71,9 +71,10 @@ async function startServer(t, server, protocol = "http") {
   }
   t.after(() => server.close());
   const url = `${protocol}://127.0.0.1:${server.address().port}`;
-  const probe = spawnSync("curl", ["-q", "--max-time", "1", "--output", "/dev/null", `${url}/__omahp_probe`], {
-    encoding: "utf8", env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" }
-  });
+  const probeArgs = ["-q"];
+  if (caCertPath) probeArgs.push("--cacert", caCertPath);
+  probeArgs.push("--max-time", "1", "--output", "/dev/null", `${url}/__omahp_probe`);
+  const probe = await runCurl(probeArgs);
   if (loopbackAvailable === undefined) loopbackAvailable = probe.status === 0;
   if (!loopbackAvailable) {
     if (process.env.CI || process.env.OMA_HOMEPAGE_REQUIRE_INTEGRATION === "1") throw new Error("CI must permit connections to temporary loopback servers for transport integration tests");
@@ -93,7 +94,7 @@ test("curl reads configuration from stdin and returns body plus HTTP metadata", 
   });
   const base = await startServer(t, server);
   if (!base) return;
-  const response = curl(base + "/api/services");
+  const response = await curl(base + "/api/services");
   assert.equal(response.status, 0, response.stderr);
   assert.equal(response.stdout, "[]");
   const metadata = Curl.parseOutput(response.stdout, response.stderr, "OMAHP_TEST");
@@ -118,7 +119,7 @@ test("rejects all redirect statuses without contacting destinations", async t =>
     });
     const base = await startServer(t, server);
     if (!base) return;
-    const response = curl(base + "/api/services");
+    const response = await curl(base + "/api/services");
     assert.equal(response.status, 0, response.stderr);
     assert.equal(Curl.parseOutput(response.stdout, response.stderr, "OMAHP_TEST").status, code);
     assert.equal(destinationHits, 0, `HTTP ${code} must not be followed`);
@@ -138,7 +139,7 @@ test("-q is the first curl option and hostile curlrc cannot enable redirect foll
   });
   const base = await startServer(t, server);
   if (!base) return;
-  const response = curl(base + "/api/services", {}, { HOME: directory });
+  const response = await curl(base + "/api/services", {}, { HOME: directory });
   assert.equal(response.status, 0);
   assert.equal(targetHits, 0);
 });
@@ -156,12 +157,12 @@ test("HTTPS rejects untrusted certificates and accepts an explicitly selected CA
     response.writeHead(200, { "content-type": "application/json" });
     response.end("[]");
   });
-  const base = await startServer(t, server, "https");
+  const base = await startServer(t, server, "https", certPath);
   if (!base) return;
-  const rejected = curl(base + "/api/services");
+  const rejected = await curl(base + "/api/services");
   assert.notEqual(rejected.status, 0);
   assert.equal(Curl.errorKind(rejected.status), "tls");
-  const trusted = curl(base + "/api/services", { caCertPath: certPath });
+  const trusted = await curl(base + "/api/services", { caCertPath: certPath });
   assert.equal(trusted.status, 0, trusted.stderr);
   assert.equal(Curl.parseOutput(trusted.stdout, trusted.stderr, "OMAHP_TEST").status, 200);
   assert.equal(trusted.stdout, "[]");
@@ -192,12 +193,12 @@ test("curl can validate a private-CA leaf used as an explicit trust anchor", asy
     response.writeHead(200, { "content-type": "application/json" });
     response.end("[]");
   });
-  const base = await startServer(t, server, "https");
+  const base = await startServer(t, server, "https", leafCert);
   if (!base) return;
-  const rejected = curl(base + "/api/services");
+  const rejected = await curl(base + "/api/services");
   assert.notEqual(rejected.status, 0);
   assert.equal(Curl.errorKind(rejected.status), "tls");
-  const trusted = curl(base + "/api/services", { caCertPath: leafCert });
+  const trusted = await curl(base + "/api/services", { caCertPath: leafCert });
   assert.equal(trusted.status, 0, trusted.stderr);
   assert.equal(Curl.parseOutput(trusted.stdout, trusted.stderr, "OMAHP_TEST").status, 200);
   assert.equal(trusted.stdout, "[]");
@@ -212,7 +213,7 @@ test("enforces transfer and parser size limits", async t => {
   });
   const base = await startServer(t, server);
   if (!base) return;
-  const response = curl(base + "/api/services", { maxBytes: Model.LIMITS.responseBytes });
+  const response = await curl(base + "/api/services", { maxBytes: Model.LIMITS.responseBytes });
   assert.notEqual(response.status, 0);
   assert.ok(Buffer.byteLength(response.stdout) <= Model.LIMITS.responseBytes);
 });
@@ -226,30 +227,36 @@ test("enforces the transfer limit for chunked responses without Content-Length",
   });
   const base = await startServer(t, server);
   if (!base) return;
-  const response = curl(base + "/api/services", { maxBytes: Model.LIMITS.responseBytes });
+  const response = await curl(base + "/api/services", { maxBytes: Model.LIMITS.responseBytes });
   assert.notEqual(response.status, 0);
   assert.ok(Buffer.byteLength(response.stdout) <= Model.LIMITS.responseBytes);
 });
 
 test("keeps MCP token only in stdin config, never in curl argv or environment", async t => {
   const token = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6";
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omahome-mcp-token-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const keyPath = path.join(directory, "key.pem");
+  const certPath = path.join(directory, "cert.pem");
+  const generated = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", keyPath,
+    "-out", certPath, "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"], { stdio: "ignore" });
+  assert.equal(generated.status, 0, "openssl must create the temporary MCP transport certificate");
   let authorization = "";
-  const server = http.createServer((request, response) => {
+  const server = https.createServer({ key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }, (request, response) => {
     if (request.url === "/__omahp_probe") { response.writeHead(204); response.end(); return; }
     authorization = request.headers.authorization || "";
     request.resume();
     request.on("end", () => { response.writeHead(200, { "content-type": "application/json" }); response.end('{"jsonrpc":"2.0","id":1,"result":{}}'); });
   });
-  const base = await startServer(t, server);
+  const base = await startServer(t, server, "https", certPath);
   if (!base) return;
-  const config = Curl.buildRequest({ method: "POST", url: base + "/api/mcp", timeoutSec: 3, token,
+  const config = Curl.buildRequest({ method: "POST", url: base + "/api/mcp", timeoutSec: 3, token, caCertPath: certPath,
     body: '{"jsonrpc":"2.0","id":1,"method":"initialize"}' }, "OMAHP_TEST");
   assert.equal(config.ok, true);
   assert.equal(config.text.includes(token), true);
   const args = Curl.curlArguments();
   assert.equal(args.includes(token), false);
-  const child = spawnSync("curl", args, { input: config.text, encoding: "utf8",
-    env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" } });
+  const child = await runCurl(args, { input: config.text, env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" } });
   assert.equal(child.status, 0, child.stderr);
   assert.equal(authorization, "Bearer " + token);
   assert.equal(JSON.stringify(child.spawnargs).includes(token), false);

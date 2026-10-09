@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { runCurl } = require("./run-curl.js");
 const Curl = require("../CurlConfig.js");
 const Mcp = require("../McpClient.js");
 const Model = require("../Model.js");
@@ -42,9 +43,7 @@ async function listen(t, server, cert, options = {}) {
   }
   t.after(() => new Promise(resolve => tlsServer.close(resolve)));
   const base = `https://127.0.0.1:${tlsServer.address().port}`;
-  const probe = spawnSync("curl", ["-q", "--cacert", cert.caCertPath, "--max-time", "1", "--output", "/dev/null", base + "/__omahp_probe"], {
-    encoding: "utf8", env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" }
-  });
+  const probe = await runCurl(["-q", "--cacert", cert.caCertPath, "--max-time", "1", "--output", "/dev/null", base + "/__omahp_probe"]);
   if (loopbackAvailable === undefined) loopbackAvailable = probe.status === 0;
   if (!loopbackAvailable) {
     if (process.env.CI || process.env.OMA_HOMEPAGE_REQUIRE_INTEGRATION === "1") throw new Error("CI must permit connections to temporary Homepage fixture servers");
@@ -53,13 +52,12 @@ async function listen(t, server, cert, options = {}) {
   return { base, ...options };
 }
 
-function invoke(base, caCertPath, method, body, id = 1, requestToken = token, timeoutSec = 2) {
+async function invoke(base, caCertPath, method, body, id = 1, requestToken = token, timeoutSec = 2) {
   const built = Curl.buildRequest({ method, url: base + (method === "GET" ? "/api/services" : "/api/mcp"),
     timeoutSec, maxBytes: 512 * 1024, caCertPath, token: method === "POST" ? requestToken : "", body: method === "POST" ? body : "" }, "OMAHP_FIXTURE");
   assert.equal(built.ok, true, built.error);
-  const child = spawnSync("curl", Curl.curlArguments(), {
+  const child = await runCurl(Curl.curlArguments(), {
     input: built.text,
-    encoding: "utf8",
     env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" }
   });
   const parsed = Curl.parseOutput(child.stdout, child.stderr, "OMAHP_FIXTURE");
@@ -67,17 +65,17 @@ function invoke(base, caCertPath, method, body, id = 1, requestToken = token, ti
     argv: child.spawnargs || [], env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" }, config: built.text };
 }
 
-function callTool(base, caCertPath, name, args, id) {
+async function callTool(base, caCertPath, name, args, id) {
   const request = Mcp.makeToolCall(id, name, args);
-  const result = invoke(base, caCertPath, "POST", JSON.stringify(request), id);
+  const result = await invoke(base, caCertPath, "POST", JSON.stringify(request), id);
   assert.equal(result.exitCode, 0, result.stderr);
   assert.equal(result.parsed.status, 200);
   const response = Mcp.parseRpcResponse(result.stdout, id);
   return response.ok ? { ok: true, result: response.result } : response;
 }
 
-function listTools(base, caCertPath, id) {
-  const result = invoke(base, caCertPath, "POST", JSON.stringify(Mcp.rpcRequest(id, "tools/list", {})), id);
+async function listTools(base, caCertPath, id) {
+  const result = await invoke(base, caCertPath, "POST", JSON.stringify(Mcp.rpcRequest(id, "tools/list", {})), id);
   assert.equal(result.exitCode, 0, result.stderr);
   const response = Mcp.parseRpcResponse(result.stdout, id);
   assert.equal(response.ok, true, response.error);
@@ -86,7 +84,7 @@ function listTools(base, caCertPath, id) {
 
 function requestVia(base, caCertPath) {
   let id = 0;
-  return (name, args, callback) => callback(callTool(base, caCertPath, name, args, ++id));
+  return async (name, args, callback) => callback(await callTool(base, caCertPath, name, args, ++id));
 }
 
 async function fixtureRpc(fixture, method, params, id) {
@@ -141,18 +139,18 @@ test("Homepage fixture lists capabilities and reads only services.yaml over veri
   const endpoint = await listen(t, fixture.server, cert);
   if (!endpoint) return;
 
-  const api = invoke(endpoint.base, cert.caCertPath, "GET", "");
+  const api = await invoke(endpoint.base, cert.caCertPath, "GET", "");
   assert.equal(api.exitCode, 0, api.stderr);
   assert.equal(api.parsed.status, 200);
   const endpointInfo = HomepageApi.servicesUrl(endpoint.base, Model.normalizeBaseUrl, Model.originUrl);
   assert.equal(endpointInfo.url, endpoint.base + "/api/services");
   assert.equal(Model.parseServices(api.stdout).services[0].name, "Proxmox");
 
-  const tools = listTools(endpoint.base, cert.caCertPath, 20);
+  const tools = await listTools(endpoint.base, cert.caCertPath, 20);
   assert.equal(tools.ok, true);
   for (const name of ["read_config_file", "validate_config_file", "add_service", "write_config_file"])
     assert.ok(tools.names.includes(name));
-  const read = callTool(endpoint.base, cert.caCertPath, "read_config_file", { file: "services.yaml" }, 2);
+  const read = await callTool(endpoint.base, cert.caCertPath, "read_config_file", { file: "services.yaml" }, 2);
   assert.match(Mcp.textFromToolResult(read.result).text, /Proxmox/);
 
   const attemptedOtherFile = Mcp.makeToolCall(3, "read_config_file", { file: "widgets.yaml" });
@@ -169,7 +167,7 @@ test("Homepage fixture lists capabilities and reads only services.yaml over veri
   assert.equal(api.config.includes(token), false);
   assert.equal(JSON.stringify(api.argv).includes(token), false);
   assert.equal(JSON.stringify(api.env).includes(token), false);
-  const authenticatedRequest = invoke(endpoint.base, cert.caCertPath,
+  const authenticatedRequest = await invoke(endpoint.base, cert.caCertPath,
     "POST", JSON.stringify(Mcp.rpcRequest(99, "tools/list", {})), 99);
   assert.equal(authenticatedRequest.exitCode, 0);
   assert.equal(authenticatedRequest.config.includes(token), true, "the fixture token is sent only in curl stdin config");
@@ -194,10 +192,10 @@ test("MCP disabled, auth failures, malformed JSON-RPC and missing result are rep
     { mcpMissingResult: true, missingResult: true }
   ]) {
     const cert = certificate(t);
-    const fixture = createHomepageServer(scenario);
+    const fixture = createHomepageServer({ ...scenario, token });
     const endpoint = await listen(t, fixture.server, cert);
     if (!endpoint) return;
-    const result = invoke(endpoint.base, cert.caCertPath, "POST",
+    const result = await invoke(endpoint.base, cert.caCertPath, "POST",
       JSON.stringify(Mcp.rpcRequest(5, "tools/list", {})), 5, token, 2);
     assert.equal(result.exitCode, 0, result.stderr);
     assert.equal(result.parsed.status, scenario.expected || 200);
@@ -220,7 +218,7 @@ test("MCP rejects every redirect status and never reaches a redirect destination
     });
     const endpoint = await listen(t, tlsServer, cert);
     if (!endpoint) return;
-    const result = invoke(endpoint.base, cert.caCertPath, "POST",
+    const result = await invoke(endpoint.base, cert.caCertPath, "POST",
       JSON.stringify(Mcp.rpcRequest(1, "tools/list", {})), 1, token, 2);
     assert.equal(result.exitCode, 0, result.stderr);
     assert.equal(result.parsed.status, code);
@@ -233,14 +231,14 @@ test("MCP timeout is bounded and an invalid bearer token is rejected", async t =
   const fixture = createHomepageServer({ token, mcpDelayMs: 1500 });
   const endpoint = await listen(t, fixture.server, cert);
   if (!endpoint) return;
-  const timed = invoke(endpoint.base, cert.caCertPath, "POST",
+  const timed = await invoke(endpoint.base, cert.caCertPath, "POST",
     JSON.stringify(Mcp.rpcRequest(1, "tools/list", {})), 1, token, 1);
   assert.equal(timed.exitCode, 28);
 
   const authFixture = createHomepageServer({ token });
   const authEndpoint = await listen(t, authFixture.server, cert);
   if (!authEndpoint) return;
-  const wrong = invoke(authEndpoint.base, cert.caCertPath, "POST",
+  const wrong = await invoke(authEndpoint.base, cert.caCertPath, "POST",
     JSON.stringify(Mcp.rpcRequest(2, "tools/list", {})), 2, "wrong-token-value-that-is-definitely-not-valid-000", 2);
   assert.equal(wrong.exitCode, 0);
   assert.equal(wrong.parsed.status, 401);
@@ -260,7 +258,7 @@ test("Homepage fixture simulates auth failures, server errors, malformed JSON an
     const fixture = createHomepageServer(scenario);
     const endpoint = await listen(t, fixture.server, cert);
     if (!endpoint) return;
-    const result = invoke(endpoint.base, cert.caCertPath, "GET", "", 1, token, 1);
+    const result = await invoke(endpoint.base, cert.caCertPath, "GET", "", 1, token, 1);
     if (scenario.timeout) assert.equal(result.exitCode, 28, "delayed fixture should exceed curl's one second timeout");
     else {
       assert.equal(result.exitCode, 0, result.stderr);
