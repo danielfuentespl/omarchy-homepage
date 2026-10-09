@@ -31,6 +31,8 @@ omarchy plugin add https://github.com/danielfuentespl/omarchy-homepage --yes
 omarchy plugin enable com.blogvirtualizado.omaops.homepage --section right
 ```
 
+Remove it with `omarchy plugin remove com.blogvirtualizado.omaops.homepage`.
+
 `plugin add` installs the plugin. `plugin enable` activates it, and `--section right` places its widget in the right side of the bar. To use the interactive install flow, omit `--yes`:
 
 ```sh
