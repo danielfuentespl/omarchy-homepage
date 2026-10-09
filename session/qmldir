@@ -1,0 +1,2 @@
+module OmaHomepageSession
+singleton SessionState 1.0 SessionState.qml

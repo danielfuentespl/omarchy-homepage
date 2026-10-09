@@ -94,6 +94,7 @@ Item {
       tlsTrustMode: spec.tlsTrustMode || "system",
       tlsTrustOrigin: spec.tlsTrustOrigin || "",
       tlsTrustFingerprint: spec.tlsTrustFingerprint || "",
+      editingEnabled: spec.editingEnabled === true,
       mcpPath,
       secretId: spec.secretId || "default",
       caCertPath: spec.caCertPath || "",
@@ -172,8 +173,7 @@ Item {
       tools = toolsResult.names;
       authenticated = Boolean(token);
       readEnabled = Mcp.supportsTool(tools, "read_config_file");
-      serverWriteAvailable = Mcp.supportsTool(tools, "add_service") || Mcp.supportsTool(tools, "write_config_file");
-      // This phase never enables writes, even if Homepage advertises write tools.
+      serverWriteAvailable = false;
       writeEnabled = false;
       if (!authenticated) {
         status = "MCP AUTH REQUIRED";
@@ -181,15 +181,43 @@ Item {
         _checking = false;
         return;
       }
-      status = "MCP READ ONLY";
-      const advertised = Mcp.capabilitySummary(tools);
-      message = (readEnabled
-        ? "Authenticated. Only services.yaml can be read. "
-        : "Homepage MCP does not advertise read_config_file. ")
-        + "Detected: " + (advertised.length ? advertised.join(", ") : "no supported tools")
-        + ". OmaHomepage remains read-only.";
-      _checking = false;
+      if (!readEnabled) {
+        status = "MCP READ ONLY";
+        message = "Homepage MCP does not advertise read_config_file. OmaHomepage remains read-only.";
+        _checking = false;
+        return;
+      }
+      if (!Mcp.supportsTool(tools, "list_config_files")) {
+        finishWriteCapabilityCheck(cycle, false, "Homepage MCP cannot report its services.yaml write permission.");
+        return;
+      }
+      callRawTool(cycle, "list_config_files", {}, function(configResult) {
+        if (!current(cycle)) return;
+        if (!configResult.ok) {
+          finishWriteCapabilityCheck(cycle, false, "Homepage write permission could not be verified.");
+          return;
+        }
+        const parsed = Mcp.parseRpcResponse(configResult.body, configResult.id);
+        const config = parsed.ok ? Mcp.parseWritableConfigFiles(parsed.result) : parsed;
+        finishWriteCapabilityCheck(cycle, config.ok && config.writable === true &&
+          Mcp.supportsTool(tools, "add_service") && Mcp.supportsTool(tools, "write_config_file"),
+          config.ok ? "" : "Homepage write permission could not be verified.");
+      });
     });
+  }
+
+  function finishWriteCapabilityCheck(cycle, writable, explanation) {
+    if (!current(cycle)) return;
+    serverWriteAvailable = writable === true;
+    writeEnabled = Mcp.writeGatesOpen(serverWriteAvailable, cycle.editingEnabled, authenticated);
+    status = writeEnabled ? "MCP WRITE ENABLED" : "MCP READ ONLY";
+    const advertised = Mcp.capabilitySummary(tools);
+    message = (writeEnabled
+      ? "Both Homepage write permission and OmaHomepage editing are enabled. "
+      : "Writes require both Homepage write permission and editingEnabled in OmaHomepage. ")
+      + (explanation ? explanation + " " : "")
+      + "Detected: " + (advertised.length ? advertised.join(", ") : "no supported tools") + ".";
+    _checking = false;
   }
 
   function request(cycle, token, body, callback) {
@@ -272,14 +300,20 @@ Item {
   }
 
   function callRawTool(cycle, name, args, callback) {
-    if (name !== "read_config_file" || !args || args.file !== "services.yaml" || Object.keys(args).length !== 1) {
-      callback({ ok: false, error: "Only read_config_file for services.yaml is allowed." }); return;
-    }
-    if (!current(cycle) || !_token) { callback({ ok: false, error: "Homepage MCP authentication is required." }); return; }
-    if (!Mcp.supportsTool(tools, "read_config_file")) { callback({ ok: false, error: "Homepage does not advertise read_config_file." }); return; }
+    if (!current(cycle) || !_token) { callback({ ok: false, error: "Homepage MCP authentication is required.", requestStarted: false }); return; }
     const id = ++_requestId;
-    const toolRequest = Mcp.makeToolCall(id, name, args);
-    if (!toolRequest) { callback({ ok: false, error: "Only services.yaml can be read." }); return; }
+    const toolRequest = Mcp.makeToolCall(id, name, args, Model.safeHttpUrl);
+    if (!toolRequest) { callback({ ok: false, error: "The requested MCP tool or arguments are not allowed by OmaHomepage.", requestStarted: false }); return; }
+    if (name === "read_config_file" && !Mcp.supportsTool(tools, name)) {
+      callback({ ok: false, error: "Homepage does not advertise read_config_file.", requestStarted: false }); return;
+    }
+    if (name === "list_config_files" && !Mcp.supportsTool(tools, name)) {
+      callback({ ok: false, error: "Homepage does not advertise list_config_files.", requestStarted: false }); return;
+    }
+    if (["add_service", "validate_config_file", "write_config_file"].indexOf(name) !== -1 &&
+        (!currentEditingCycle() || !Mcp.supportsTool(tools, name))) {
+      callback({ ok: false, error: "Both MCP write gates and the requested tool are required.", requestStarted: false }); return;
+    }
     const requestBody = JSON.stringify(toolRequest);
     request(cycle, _token, requestBody, function(result) {
       if (!result.ok) { callback(result); return; }
@@ -294,7 +328,8 @@ Item {
   }
 
   function currentEditingCycle() {
-    return false;
+    return _cycle && current(_cycle) && _cycle.editingEnabled === true &&
+      Mcp.writeGatesOpen(serverWriteAvailable, _cycle.editingEnabled, authenticated) && Boolean(_token);
   }
 
   function readServicesYaml(callback) {
@@ -308,33 +343,10 @@ Item {
     });
   }
 
-  function validateServicesYaml(content, callback) {
-    if (!currentEditingCycle()) { callback({ ok: false, error: "Enable editing and authenticated write access first." }); return; }
-    if (typeof content !== "string" || content.length > 512 * 1024) { callback({ ok: false, error: "services.yaml exceeds the size limit." }); return; }
-    operationBusy = true;
-    callRawTool(_cycle, "validate_config_file", { file: "services.yaml", content }, function(response) {
-      if (!response.ok) { operationBusy = false; callback(response); return; }
-      const validation = Mcp.parseValidation(response.result);
-      operationBusy = false;
-      callback(validation.ok ? validation : { ok: false, error: validation.error });
-    });
-  }
-
-  function writeServicesYaml(content, callback) {
-    if (!currentEditingCycle()) { callback({ ok: false, error: "Enable editing and authenticated write access first." }); return; }
-    if (typeof content !== "string" || content.length > 512 * 1024) { callback({ ok: false, error: "services.yaml exceeds the size limit." }); return; }
-    operationBusy = true;
-    const cycle = _cycle;
-    Mcp.writeAndVerifyServicesYaml(function(name, args, done) {
-      root.callRawTool(cycle, name, args, done);
-    }, content, function(result) {
-      operationBusy = false;
-      callback(result);
-    });
-  }
-
   function addService(group, name, service, callback) {
-    if (!currentEditingCycle()) { callback({ ok: false, error: "Enable editing and authenticated write access first." }); return; }
+    if (!Mcp.canStartWrite(serverWriteAvailable, _cycle && _cycle.editingEnabled, authenticated, operationBusy) || !current(_cycle)) {
+      callback({ ok: false, error: "Both Homepage write permission and editingEnabled are required; no write was sent." }); return;
+    }
     const cleanGroup = Model.cleanText(group, Model.LIMITS.groupName);
     const cleanName = Model.cleanText(name, Model.LIMITS.name);
     const safeHref = Model.safeHttpUrl(service && service.href, Model.LIMITS.href);
@@ -348,19 +360,7 @@ Item {
       description: Model.cleanText(service.description, Model.LIMITS.description)
     };
     const icon = Model.cleanText(service.icon, Model.LIMITS.icon);
-    const siteMonitorInput = Model.cleanText(service.siteMonitor, Model.LIMITS.href);
-    const siteMonitor = siteMonitorInput ? Model.safeHttpUrl(siteMonitorInput, Model.LIMITS.href) : "";
-    const server = Model.cleanText(service.server, Model.LIMITS.metadata);
-    const container = Model.cleanText(service.container, Model.LIMITS.metadata);
-    if (siteMonitorInput && !siteMonitor) {
-      operationBusy = false;
-      callback({ ok: false, error: "Site monitor must be a safe HTTP(S) URL." });
-      return;
-    }
     if (icon) safeService.icon = icon;
-    if (siteMonitor) safeService.siteMonitor = siteMonitor;
-    if (server) safeService.server = server;
-    if (container) safeService.container = container;
     const cycle = _cycle;
     Mcp.addAndVerifyService(function(tool, args, done) {
       root.callRawTool(cycle, tool, args, done);

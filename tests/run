@@ -6,3 +6,14 @@ for test_file in tests/*.test.js; do
 done
 python3 tests/certificate_helper.test.py
 python3 tests/manifest.test.py
+
+qml_test_runner="$(command -v qmltestrunner || true)"
+if [[ -z "$qml_test_runner" && -x /usr/lib/qt6/bin/qmltestrunner ]]; then
+  qml_test_runner=/usr/lib/qt6/bin/qmltestrunner
+fi
+if [[ -n "$qml_test_runner" ]]; then
+  env -u DISPLAY -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME='' \
+    QT_QUICK_BACKEND=software "$qml_test_runner" -input tests/qml -o -,txt
+else
+  echo "SKIP QML lifecycle tests: qmltestrunner is not installed"
+fi

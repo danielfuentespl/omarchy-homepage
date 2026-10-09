@@ -48,6 +48,15 @@ const style = `
   .help { color: #08c9c2; font-size: 11px; line-height: 1.45; margin: 8px 0; }
   .ca-path { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
   .ca-path .input { flex: 1; color: #42777d; overflow: hidden; white-space: nowrap; }
+  .checkbox-row { display: flex; align-items: flex-start; gap: 10px; margin: 14px 0 5px; }
+  .checkbox { flex: none; width: 16px; height: 16px; border: 1px solid #08d0c9; color: #08d0c9; text-align: center; line-height: 14px; }
+  .checkbox.checked { background: #08d0c9; color: #0d0818; }
+  .muted { color: #08aaa7; font-size: 12px; line-height: 1.45; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-top: 14px; }
+  .field { min-width: 0; }
+  .field.full { grid-column: 1 / -1; }
+  .field-label { display: block; font-size: 12px; margin: 0 0 4px; }
+  .field .input { height: 34px; white-space: nowrap; overflow: hidden; }
   .group-head { justify-content: flex-start; color: #08d0c9; padding: 8px 0 4px; }
   .group-head .arrow { width: 12px; text-align: center; }
   .service { padding: 8px 0 8px 26px; min-height: 42px; }
@@ -111,7 +120,7 @@ SHA-256: ${esc(cert.fingerprint)}</div>
 }
 
 function connected() {
-  const query = "o";
+  const query = "";
   const matchedGroups = Model.filterGroups(parsed.groups, query);
   const rows = Model.displayRows(matchedGroups, true, {});
   const rendered = rows.map(row => row.type === "group"
@@ -120,11 +129,59 @@ function connected() {
   return `<main class="panel">
     <div class="header"><span>OmaHomepage</span><span class="state">ONLINE</span></div>
     <div class="address"><span>${esc(fixture.baseUrl)}</span><span>Configure</span></div>
-    <div class="search active">${esc(query)}</div>
-    <div class="summary">${Model.countGroups(parsed.groups)} groups · ${Model.countServices(parsed.groups)} services · ${Model.countServices(matchedGroups)} matches</div>
+    <div class="search">Search services…</div>
+    <div class="summary">${Model.countGroups(parsed.groups)} groups · ${Model.countServices(parsed.groups)} services</div>
     ${rendered}
     <div class="footer"><span class="button">Refresh</span><span></span><span class="button">Open Homepage</span></div>
   </main>`;
+}
+
+function writeGate({ enabled = false, form = false, restored = false } = {}) {
+  const notice = restored ? `<div class="notice">Unsaved service draft restored</div>` : "";
+  const editing = `<div class="checkbox-row"><span class="checkbox ${enabled ? "checked" : ""}">${enabled ? "✓" : ""}</span><div><strong>Enable service editing</strong><div class="muted">Homepage MCP write permission must also be enabled.</div></div></div>`;
+  const addButton = enabled ? `<div class="actions"><span class="button">+ Add service</span></div>` : "";
+  const fields = form ? `
+    <h2>Add service</h2>
+    ${notice}
+    <div class="form-grid">
+      <div class="field"><span class="field-label">Group</span><div class="input">${restored ? "Infrastructure" : ""}</div></div>
+      <div class="field"><span class="field-label">Service name</span><div class="input">${restored ? "Demo status page" : ""}</div></div>
+      <div class="field full"><span class="field-label">URL</span><div class="input">${restored ? "https://status.example.internal" : "https://service.example.internal"}</div></div>
+      <div class="field full"><span class="field-label">Description</span><div class="input">${restored ? "Temporary documentation draft" : ""}</div></div>
+      <div class="field"><span class="field-label">Icon</span><div class="input">${restored ? "mdi-flask-outline" : ""}</div></div>
+    </div>
+    <div class="help">${restored ? "Switching apps kept this fictional draft in the current shell session." : "Continue reviews a summary. Nothing is sent until you confirm Add service."}</div>
+    <div class="actions"><span class="button">Continue</span><span class="button secondary">Cancel</span></div>` : "";
+  return `<main class="panel">
+    <div class="header"><span>OmaHomepage</span><span class="state">ONLINE</span></div>
+    <div class="address"><span>${esc(fixture.baseUrl)}</span><span>Configure</span></div>
+    <div class="summary">${Model.countGroups(parsed.groups)} groups · ${Model.countServices(parsed.groups)} services</div>
+    <h2>Configure Homepage</h2>
+    <div class="input">${esc(fixture.baseUrl)}</div>
+    <div class="tls-label">TLS · SYSTEM TRUST</div>
+    <div class="actions"><span class="button">Test connection</span><span class="button">Inspect certificate</span></div>
+    <div class="tls-label">MCP · ${enabled ? "WRITE ENABLED" : "READ ONLY"}</div>
+    ${editing}${addButton}${fields}
+    <div class="footer"><span class="button">Refresh</span><span></span><span class="button">Open Homepage</span></div>
+  </main>`;
+}
+
+function addConfirmation() {
+  const content = `<main class="panel">
+    <div class="header"><span>OmaHomepage</span><span class="state">ONLINE</span></div>
+    <div class="address"><span>${esc(fixture.baseUrl)}</span><span>Configure</span></div>
+    <div class="summary">3 groups · 7 services</div>
+    <div class="overlay"><div class="dialog">
+      <div class="trust-title">Add temporary service?</div>
+      <div class="dialog-message">Group: Infrastructure
+Service name: Demo status page
+URL: https://status.example.internal
+Description: Temporary documentation example
+Icon: mdi-flask-outline</div>
+      <div class="actions"><span class="button secondary">Cancel</span><span class="button focus">Add service</span></div>
+    </div></div>
+  </main>`;
+  return content;
 }
 
 fs.mkdirSync(output, { recursive: true });
@@ -132,14 +189,21 @@ const screenshots = [
   ["tls-certificate-untrusted.png", page(common(), "Private CA detected"), 720, 500],
   ["tls-trust-options.png", page(common({ details: true }), "Inspect and explicitly trust the certificate"), 720, 850],
   ["tls-trust-confirmation.png", page(common({ details: true, dialog: true }), "Confirm the certificate fingerprint"), 720, 850],
-  ["homepage-online-services.png", page(connected(), "Connected to Homepage"), 720, 850]
+  ["homepage-online-services.png", page(connected(), "Connected to Homepage"), 720, 900],
+  ["mcp-read-only.png", page(writeGate(), "MCP read only"), 720, 760],
+  ["mcp-write-enabled.png", page(writeGate({ enabled: true }), "MCP write enabled"), 720, 760],
+  ["add-service-form.png", page(writeGate({ enabled: true, form: true }), "Add service form"), 720, 920],
+  ["add-service-confirmation.png", page(addConfirmation(), "Confirm Add service"), 720, 650],
+  ["add-service-draft-restored.png", page(writeGate({ enabled: true, form: true, restored: true }), "Unsaved draft restored"), 720, 920]
 ];
 const chromium = process.env.CHROMIUM_BIN || "chromium";
 for (const [filename, html, width, height] of screenshots) {
   const input = path.join(temporary, filename + ".html");
   const target = path.join(output, filename);
   fs.writeFileSync(input, html);
+  const profile = path.join(temporary, `profile-${filename.replace(/[^a-z0-9-]/gi, "-")}`);
   const result = spawnSync(chromium, ["--headless", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
+    `--user-data-dir=${profile}`,
     `--window-size=${width},${height}`, `--screenshot=${target}`, `file://${input}`], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`Could not render ${filename}: ${result.stderr || result.error}`);
   console.log(`${target}`);

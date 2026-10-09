@@ -101,6 +101,6 @@
       "defaultValue": "/api/mcp"
       }
     ],
-    "disclaimer": "Independent project. Not affiliated with, sponsored by, or endorsed by Homepage or Omarchy. Homepage's MCP token can read configured service credentials. OmaHomepage MCP is read-only in this phase."
+    "disclaimer": "Independent project. Not affiliated with, sponsored by, or endorsed by Homepage or Omarchy. Homepage's MCP token can read configured service credentials. Session-only service editing requires both Homepage's HOMEPAGE_MCP_ALLOW_WRITE=true and an explicit local authorization in the open OmaHomepage panel."
   }
 }

@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell.Io
 import "Model.js" as Model
 import "HomepageApi.js" as HomepageApi
+import "session" as OmaSession
 
 Item {
   id: root
@@ -22,7 +23,17 @@ Item {
   property var mcpTools: mcpClient.tools
   property bool mcpAuthenticated: mcpClient.authenticated
   property bool mcpBusy: mcpClient.busy
-  property bool editingEnabled: false
+  // QML-engine singleton state survives destruction/recreation of plugin objects.
+  readonly property bool editingEnabled: OmaSession.SessionState.editingEnabled
+  readonly property var addServiceDraft: ({
+    active: OmaSession.SessionState.draftActive,
+    formOpen: OmaSession.SessionState.formOpen,
+    group: OmaSession.SessionState.group,
+    name: OmaSession.SessionState.name,
+    href: OmaSession.SessionState.href,
+    description: OmaSession.SessionState.description,
+    icon: OmaSession.SessionState.icon
+  })
   property var baseUrlResult: Model.normalizeBaseUrl(setting("baseUrl", ""))
   property string baseUrl: baseUrlResult.ok ? baseUrlResult.value : ""
   property string mcpPath: String(setting("mcpPath", "/api/mcp") || "/api/mcp")
@@ -38,6 +49,7 @@ Item {
   property int _generation: 0
   property int _requestId: 0
   property string _configKey: ""
+  property bool _identityReady: false
   property var _apiCycle: null
 
   function setting(name, fallback) {
@@ -55,6 +67,33 @@ Item {
     ]);
   }
 
+  function draftContextKey() {
+    return JSON.stringify([
+      baseUrl, secretId, caCertPath, tlsTrustMode, tlsTrustOrigin, tlsTrustFingerprint, mcpPath
+    ]);
+  }
+
+  function updateAddServiceDraft(field, value) {
+    OmaSession.SessionState.updateField(field, value);
+  }
+
+  function beginAddServiceDraft() {
+    return OmaSession.SessionState.beginDraft();
+  }
+
+  function clearAddServiceDraft() {
+    const wasEditing = editingEnabled;
+    OmaSession.SessionState.discardDraft();
+    if (wasEditing) checkMcp();
+  }
+
+  function setEditingEnabled(value) {
+    const previous = editingEnabled;
+    const next = value === true;
+    if (!OmaSession.SessionState.setEditing(next)) return;
+    if (previous !== next) checkMcp();
+  }
+
   function cancelOperations() {
     _generation++;
     const active = apiTransport.activeProcess;
@@ -69,6 +108,10 @@ Item {
   }
 
   function configurationChanged() {
+    if (baseUrl || _identityReady) {
+      OmaSession.SessionState.setIdentity(draftContextKey());
+      _identityReady = true;
+    }
     const key = configurationKey();
     if (key === _configKey) return;
     _configKey = key;
@@ -104,6 +147,7 @@ Item {
       tlsTrustMode,
       tlsTrustOrigin,
       tlsTrustFingerprint,
+      editingEnabled,
       requestTimeoutMs
     });
   }
@@ -181,6 +225,10 @@ Item {
   }
 
   function addService(group, name, service, callback) {
+    if (!editingEnabled || !mcpAuthenticated || !mcpServerWriteAvailable || !mcpWriteEnabled || mcpBusy) {
+      callback({ ok: false, error: "Both Homepage write permission and editingEnabled are required; no write was sent." });
+      return;
+    }
     mcpClient.addService(group, name, service, function(result) {
       if (result.ok || result.writeMayHaveChanged === true) refresh();
       callback(result);
@@ -188,17 +236,12 @@ Item {
   }
 
   function readServicesYaml(callback) { mcpClient.readServicesYaml(callback); }
-  function validateServicesYaml(content, callback) { mcpClient.validateServicesYaml(content, callback); }
-  function writeServicesYaml(content, callback) {
-    mcpClient.writeServicesYaml(content, function(result) {
-      if (result.ok || result.writeMayHaveChanged === true) refresh();
-      callback(result);
-    });
-  }
 
   onSettingsChanged: configurationChanged()
   Component.onCompleted: configurationChanged()
-  Component.onDestruction: cancelOperations()
+  Component.onDestruction: {
+    cancelOperations();
+  }
 
   CurlTransport {
     id: apiTransport

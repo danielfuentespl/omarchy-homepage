@@ -38,34 +38,19 @@ Ui.Panel {
   property string leafVerifyFingerprint: ""
   property string leafVerifyBaseUrl: ""
   property string leafTrustFailureNotice: ""
-  property bool addServiceVisible: false
   property bool addConfirmOpen: false
-  property string newGroup: ""
-  property string newName: ""
-  property string newHref: ""
-  property string newDescription: ""
-  property string newIcon: ""
-  property bool advancedFieldsOpen: false
-  property string newSiteMonitor: ""
-  property string newServer: ""
-  property string newContainer: ""
-  property bool yamlEditorOpen: false
   property bool yamlViewOpen: false
   property bool yamlViewPromptOpen: false
   property int yamlViewRequestId: 0
   property string yamlText: ""
-  property string yamlOriginalText: ""
-  property bool yamlHasOriginal: false
-  property string yamlPendingContent: ""
   property bool yamlLoading: false
-  property bool yamlConfirmOpen: false
-  property bool yamlPendingRestore: false
-  property bool restoreAvailable: false
   property double nowMs: Date.now()
 
   readonly property var barIdentity: hostWidget || root
   readonly property var hostedService: ServiceHost.hostedService(bar)
   readonly property var service: hostedService !== null ? hostedService : dummyService
+  readonly property var addDraft: service.addServiceDraft || ({ active: false, group: "", name: "", href: "", description: "", icon: "" })
+  readonly property bool addServiceVisible: addDraft.formOpen === true
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color stateColor: {
@@ -80,7 +65,8 @@ Ui.Panel {
   readonly property int totalServiceCount: Model.countServices(service.serviceGroups || [])
   readonly property int matchingServiceCount: Model.countServices(visibleGroups)
   readonly property bool writeControlsReady: service.editingEnabled === true && service.mcpAuthenticated === true
-      && service.mcpWriteEnabled === true && service.mcpBusy !== true
+      && service.mcpServerWriteAvailable === true && service.mcpWriteEnabled === true
+      && service.mcpBusy !== true && service.refreshing !== true
   readonly property string tlsAddress: configEditing ? configDraft : service.baseUrl
   readonly property string tlsOrigin: Model.originUrl(tlsAddress)
   readonly property bool tlsSettingsMatchOrigin: tlsOrigin !== "" &&
@@ -115,6 +101,7 @@ Ui.Panel {
     property bool mcpBusy: false
     property bool editingEnabled: false
     property bool refreshing: false
+    property var addServiceDraft: ({ active: false, group: "", name: "", href: "", description: "", icon: "" })
     property var serviceGroups: []
     property var services: []
     property date lastUpdated: new Date(0)
@@ -122,10 +109,23 @@ Ui.Panel {
     function refreshIfStale() {}
     function checkMcp() {}
     function checkMcpIfStale() {}
+    function setEditingEnabled(value) { editingEnabled = value === true }
+    function updateAddServiceDraft(field, value) {
+      if (["group", "name", "href", "description", "icon"].indexOf(field) === -1) return
+      const next = Object.assign({}, addServiceDraft)
+      next[field] = String(value || "")
+      next.active = true
+      addServiceDraft = next
+    }
+    function beginAddServiceDraft() {
+      if (addServiceDraft.active !== true) addServiceDraft = ({ active: true, group: "", name: "", href: "", description: "", icon: "" })
+    }
+    function clearAddServiceDraft() {
+      addServiceDraft = ({ active: false, group: "", name: "", href: "", description: "", icon: "" })
+      setEditingEnabled(false)
+    }
     function addService(group, name, spec, callback) { callback({ ok: false, error: "Homepage service is unavailable." }); }
     function readServicesYaml(callback) { callback({ ok: false, error: "Homepage service is unavailable." }); }
-    function validateServicesYaml(content, callback) { callback({ ok: false, error: "Homepage service is unavailable." }); }
-    function writeServicesYaml(content, callback) { callback({ ok: false, error: "Homepage service is unavailable." }); }
   }
 
   function setCenterHoverRevealSuppressed(value) {
@@ -133,6 +133,7 @@ Ui.Panel {
   }
 
   function open() {
+    resetEditingSession()
     setCenterHoverRevealSuppressed(false)
     controller.show()
     service.refreshIfStale()
@@ -142,6 +143,7 @@ Ui.Panel {
   }
 
   function openFromHotkey() {
+    resetEditingSession()
     controller.show()
     service.refreshIfStale()
     service.checkMcpIfStale()
@@ -150,6 +152,8 @@ Ui.Panel {
   }
 
   function close() {
+    resetEditingSession()
+    configEditing = false
     closeYamlViewer()
     setCenterHoverRevealSuppressed(false)
     controller.hide()
@@ -162,6 +166,35 @@ Ui.Panel {
   }
 
   function toggle() { opened ? close() : openFromHotkey() }
+
+  function resetEditingSession() {
+    if (addServiceVisible) return
+    if (service && typeof service.setEditingEnabled === "function") service.setEditingEnabled(false)
+  }
+
+  function openAddServiceForm() {
+    if (!writeControlsReady || service.mcpBusy) return
+    const wasRestored = addServiceVisible
+    service.beginAddServiceDraft()
+    notice = wasRestored ? "Unsaved service draft restored." : ""
+    addConfirmOpen = false
+    scrollToAddServiceForm(true)
+  }
+
+  function scrollToAddServiceForm(focusGroup) {
+    Qt.callLater(function() {
+      if (!root.opened || !root.addServiceVisible) return
+      resultsFlickable.contentY = Math.max(0, Math.min(
+        resultsFlickable.contentHeight - resultsFlickable.height, addFormSection.y))
+      if (focusGroup) addGroupInput.forceActiveFocus()
+    })
+  }
+
+  function closeAddServiceForm() {
+    addConfirmOpen = false
+    service.clearAddServiceDraft()
+    notice = ""
+  }
 
   function switchPanel(direction) {
     if (bar && typeof bar.switchPanelFrom === "function") return bar.switchPanelFrom(barIdentity, direction)
@@ -177,7 +210,21 @@ Ui.Panel {
     notice = ""
     configDraft = String(setting("baseUrl", "") || "")
     configEditing = true
-    Qt.callLater(function() { baseUrlInput.forceActiveFocus(); baseUrlInput.selectAll() })
+    Qt.callLater(function() {
+      if (!root.opened || !root.configEditing) return
+      resultsFlickable.contentY = Math.max(0, configSection.y)
+      baseUrlInput.forceActiveFocus()
+      baseUrlInput.selectAll()
+    })
+  }
+
+  function toggleConfiguration() {
+    if (configEditing) {
+      configEditing = false
+      resultsFlickable.contentY = 0
+    } else {
+      beginConfigEditing()
+    }
   }
 
   function saveSetting(name, value) {
@@ -198,6 +245,7 @@ Ui.Panel {
     settings = entry
     if (hostedService) hostedService.settings = entry
     configEditing = false
+    resultsFlickable.contentY = 0
     return true
   }
 
@@ -224,6 +272,7 @@ Ui.Panel {
     settings = entry
     if (hostedService) hostedService.settings = entry
     configEditing = false
+    resultsFlickable.contentY = 0
     return true
   }
 
@@ -512,134 +561,59 @@ Ui.Panel {
       yamlLoading = false
       if (!result.ok) { notice = result.error; return }
       yamlText = result.content
-      yamlOriginalText = ""
-      yamlHasOriginal = false
-      yamlPendingContent = ""
-      restoreAvailable = false
-      yamlEditorOpen = false
       yamlViewOpen = true
       notice = ""
     })
   }
 
-  function closeYamlEditor() {
+  function closeYamlViewer() {
     yamlViewRequestId++
     yamlViewPromptOpen = false
-    yamlConfirmOpen = false
-    yamlPendingContent = ""
-    yamlPendingRestore = false
-    yamlEditorOpen = false
     yamlViewOpen = false
     yamlLoading = false
     yamlText = ""
-    yamlOriginalText = ""
-    yamlHasOriginal = false
-    restoreAvailable = false
-  }
-
-  function closeYamlViewer() { closeYamlEditor() }
-
-  function saveYaml() {
-    if (!writeControlsReady || yamlLoading) return
-    const candidate = yamlPendingRestore ? yamlOriginalText : yamlText
-    if (typeof candidate !== "string" || candidate.length > 512 * 1024) {
-      notice = "services.yaml exceeds the size limit."
-      return
-    }
-    notice = "Validating services.yaml…"
-    yamlLoading = true
-    service.validateServicesYaml(candidate, function(result) {
-      yamlLoading = false
-      if (!result.ok || !result.valid) {
-        notice = validationMessage(result, "Homepage rejected the YAML.")
-        yamlPendingRestore = false
-        return
-      }
-      yamlPendingContent = candidate
-      yamlConfirmOpen = true
-      notice = "Homepage validated the YAML. Confirm to send it to Homepage."
-    })
-  }
-
-  function validationMessage(result, fallback) {
-    const mark = result && result.mark && typeof result.mark.line === "number"
-      ? " (line " + result.mark.line + (typeof result.mark.column === "number" ? ", column " + result.mark.column : "") + ")" : ""
-    return (result && result.error || fallback) + mark
-  }
-
-  function cancelYamlConfirmation() {
-    yamlConfirmOpen = false
-    yamlPendingContent = ""
-    yamlPendingRestore = false
-  }
-
-  function confirmYamlSave() {
-    if (!yamlConfirmOpen || !writeControlsReady || yamlLoading) return
-    const candidate = yamlPendingContent
-    const restoring = yamlPendingRestore
-    yamlConfirmOpen = false
-    yamlPendingContent = ""
-    yamlPendingRestore = false
-    yamlLoading = true
-    notice = restoring ? "Restoring the previous services.yaml snapshot…" : "Saving services.yaml and verifying it…"
-    service.writeServicesYaml(candidate, function(result) {
-      yamlLoading = false
-      notice = result.ok ? result.message : validationMessage(result, "Homepage could not save services.yaml.")
-      if (result.ok) {
-        restoreAvailable = false
-        yamlOriginalText = candidate
-        yamlHasOriginal = true
-      } else if (result.writeMayHaveChanged === true && !restoring && yamlHasOriginal) {
-        restoreAvailable = true
-        notice += " The write may have changed Homepage; you can explicitly restore the version read when editing began."
-      } else if (result.writeMayHaveChanged === true && restoring) {
-        restoreAvailable = true
-        notice += " Restoration could not be verified; do not retry automatically."
-      }
-    })
-  }
-
-  function beginRestore() {
-    if (!restoreAvailable || !yamlHasOriginal || !writeControlsReady || yamlLoading) return
-    yamlPendingRestore = true
-    saveYaml()
   }
 
   function addService() {
     if (!writeControlsReady || service.mcpBusy) return
+    const group = Model.cleanText(addDraft.group, Model.LIMITS.groupName)
+    const name = Model.cleanText(addDraft.name, Model.LIMITS.name)
+    const href = Model.safeHttpUrl(addDraft.href, Model.LIMITS.href)
+    const description = Model.cleanText(addDraft.description, Model.LIMITS.description)
+    const icon = Model.cleanText(addDraft.icon, Model.LIMITS.icon)
+    if (!group || group !== addDraft.group.trim()) { notice = "Enter a simple group name (up to 120 characters)."; addGroupInput.forceActiveFocus(); return }
+    if (!name || name !== addDraft.name.trim()) { notice = "Enter a service name (up to 160 characters)."; newNameInput.forceActiveFocus(); return }
+    if (!href) { notice = "Enter a safe HTTP(S) service URL."; newHrefInput.forceActiveFocus(); return }
+    if (addDraft.description.length > Model.LIMITS.description || description !== addDraft.description.trim()) { notice = "Description is too long or contains unsupported characters."; newDescriptionInput.forceActiveFocus(); return }
+    if (addDraft.icon.length > Model.LIMITS.icon || icon !== addDraft.icon.trim()) { notice = "Icon is too long or contains unsupported characters."; newIconInput.forceActiveFocus(); return }
     addConfirmOpen = true
   }
 
   function cancelAddConfirmation() {
-    addConfirmOpen = false
+    closeAddServiceForm()
   }
 
   function confirmAddService() {
     if (!addConfirmOpen || !writeControlsReady || service.mcpBusy) return
     addConfirmOpen = false
     notice = "Adding service and verifying it from Homepage…"
-    service.addService(newGroup, newName, {
-      href: newHref,
-      description: newDescription,
-      icon: newIcon,
-      siteMonitor: newSiteMonitor,
-      server: newServer,
-      container: newContainer
+    const group = Model.cleanText(addDraft.group, Model.LIMITS.groupName)
+    const name = Model.cleanText(addDraft.name, Model.LIMITS.name)
+    const href = Model.safeHttpUrl(addDraft.href, Model.LIMITS.href)
+    const description = Model.cleanText(addDraft.description, Model.LIMITS.description)
+    const icon = Model.cleanText(addDraft.icon, Model.LIMITS.icon)
+    if (!group || !name || !href || !writeControlsReady || service.mcpBusy) return
+    service.addService(group, name, {
+      href,
+      description,
+      icon
     }, function(result) {
       notice = result.ok ? result.message : result.error
       if (!result.ok && result.writeMayHaveChanged === true) {
         notice += " The request may have changed Homepage; check the service list before trying again."
       }
       if (result.ok) {
-        addServiceVisible = false
-        newName = ""
-        newHref = ""
-        newDescription = ""
-        newIcon = ""
-        newSiteMonitor = ""
-        newServer = ""
-        newContainer = ""
-        advancedFieldsOpen = false
+        closeAddServiceForm()
       }
     })
   }
@@ -651,11 +625,24 @@ Ui.Panel {
     when: root.hostedService !== null
   }
 
-  onOpenedChanged: if (opened) {
-    nowMs = Date.now()
-    service.refreshIfStale()
-    service.checkMcpIfStale()
-    if (!service.baseUrl) beginConfigEditing()
+  onOpenedChanged: {
+    if (opened) {
+      resetEditingSession()
+      nowMs = Date.now()
+      service.refreshIfStale()
+      service.checkMcpIfStale()
+      if (addServiceVisible) {
+        addConfirmOpen = false
+        notice = "Unsaved service draft restored."
+        scrollToAddServiceForm(false)
+      }
+      if (!service.baseUrl) beginConfigEditing()
+    } else {
+      addConfirmOpen = false
+      resetEditingSession()
+      configEditing = false
+      resultsFlickable.contentY = 0
+    }
   }
   onConfigDraftChanged: {
     const rollingBackLeaf = leafVerifyPending && Model.originUrl(configDraft) !== Model.originUrl(leafVerifyBaseUrl)
@@ -676,7 +663,10 @@ Ui.Panel {
     tlsCertificate = null
     tlsNotice = ""
   }
-  Component.onDestruction: cancelTlsOperation()
+  Component.onDestruction: {
+    resetEditingSession()
+    cancelTlsOperation()
+  }
 
   Timer {
     interval: 10000
@@ -735,13 +725,11 @@ Ui.Panel {
       anchors.fill: parent
       blocked: baseUrlInput.activeFocus || searchField.activeFocus || addGroupInput.activeFocus || newNameInput.activeFocus
         || newHrefInput.activeFocus || newDescriptionInput.activeFocus || newIconInput.activeFocus
-        || newSiteMonitorInput.activeFocus || newServerInput.activeFocus || newContainerInput.activeFocus
-        || yamlInput.activeFocus || caPathInput.activeFocus
+        || caPathInput.activeFocus
       onCloseRequested: {
         if (root.tlsConfirmOpen) { root.tlsConfirmOpen = false; root.tlsConfirmAction = "" }
         else if (root.removeTrustConfirmOpen) root.removeTrustConfirmOpen = false
         else if (root.yamlViewPromptOpen) root.yamlViewPromptOpen = false
-        else if (root.yamlConfirmOpen) root.cancelYamlConfirmation()
         else if (root.addConfirmOpen) root.cancelAddConfirmation()
         else root.close()
       }
@@ -749,8 +737,6 @@ Ui.Panel {
         if (root.tlsConfirmOpen) root.confirmCertificateTrust()
         else if (root.removeTrustConfirmOpen) root.removeCustomTrust()
         else if (root.yamlViewPromptOpen) root.loadYamlView()
-        else if (root.yamlConfirmOpen) root.confirmYamlSave()
-        else if (root.addConfirmOpen) root.confirmAddService()
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
@@ -797,7 +783,7 @@ Ui.Panel {
               font.pixelSize: Style.font.bodySmall
               opacity: 0.8
             }
-            Ui.Button { text: "Configure"; onClicked: root.beginConfigEditing() }
+            Ui.Button { text: root.configEditing ? "Done" : "Configure"; onClicked: root.toggleConfiguration() }
           }
 
           Ui.TextField {
@@ -953,6 +939,7 @@ Ui.Panel {
               }
 
           Rectangle {
+            id: configSection
             Layout.fillWidth: true
             visible: root.configEditing
             implicitHeight: configColumn.implicitHeight + Style.space(14)
@@ -963,6 +950,30 @@ Ui.Panel {
               anchors.fill: parent
               anchors.margins: Style.space(8)
               Text { text: "Configure Homepage"; color: root.foreground; font.pixelSize: Style.font.heading; font.bold: true }
+              Text {
+                Layout.fillWidth: true
+                text: "MCP · " + root.service.mcpStatus + (root.service.mcpMessage ? " · " + root.service.mcpMessage : "")
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                color: root.service.mcpStatus === "MCP AUTHENTICATION FAILED" ? root.urgent : root.foreground
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+              QQC.CheckBox {
+                id: editingCheckBox
+                text: "Enable service editing"
+                checked: root.service.editingEnabled === true
+                onToggled: root.service.setEditingEnabled(checked)
+              }
+              Text {
+                Layout.fillWidth: true
+                text: "Allows OmaHomepage to add services through Homepage MCP. Homepage MCP write permission must also be enabled. Editing permission is temporary. It is kept while an unsaved service draft exists and resets when the draft is discarded, completed, or the Omarchy shell restarts."
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                color: root.foreground
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
               Ui.TextField {
                 id: baseUrlInput
                 Layout.fillWidth: true
@@ -1080,6 +1091,7 @@ Ui.Panel {
           }
 
           Rectangle {
+            id: addFormSection
             Layout.fillWidth: true
             visible: root.addServiceVisible
             implicitHeight: addColumn.implicitHeight + Style.space(14)
@@ -1090,25 +1102,29 @@ Ui.Panel {
               anchors.fill: parent
               anchors.margins: Style.space(8)
               Text { text: "Add Homepage service"; color: root.foreground; font.pixelSize: Style.font.heading; font.bold: true }
-              Ui.TextField { id: addGroupInput; Layout.fillWidth: true; placeholderText: "Group"; text: root.newGroup; onTextChanged: root.newGroup = text }
-              Ui.TextField { id: newNameInput; Layout.fillWidth: true; placeholderText: "Service name"; text: root.newName; onTextChanged: root.newName = text }
-              Ui.TextField { id: newHrefInput; Layout.fillWidth: true; placeholderText: "http:// or https:// service address"; text: root.newHref; onTextChanged: root.newHref = text }
-              Ui.TextField { id: newDescriptionInput; Layout.fillWidth: true; placeholderText: "Description (optional)"; text: root.newDescription; onTextChanged: root.newDescription = text }
-              Ui.TextField { id: newIconInput; Layout.fillWidth: true; placeholderText: "Icon (optional)"; text: root.newIcon; onTextChanged: root.newIcon = text }
-              Ui.Button { text: root.advancedFieldsOpen ? "Hide advanced fields" : "Advanced fields"; onClicked: root.advancedFieldsOpen = !root.advancedFieldsOpen }
-              Ui.TextField { id: newSiteMonitorInput; Layout.fillWidth: true; visible: root.advancedFieldsOpen; placeholderText: "Site monitor URL (optional)"; text: root.newSiteMonitor; onTextChanged: root.newSiteMonitor = text }
-              Ui.TextField { id: newServerInput; Layout.fillWidth: true; visible: root.advancedFieldsOpen; placeholderText: "Homepage Docker server (optional)"; text: root.newServer; onTextChanged: root.newServer = text }
-              Ui.TextField { id: newContainerInput; Layout.fillWidth: true; visible: root.advancedFieldsOpen; placeholderText: "Container name (optional)"; text: root.newContainer; onTextChanged: root.newContainer = text }
+              Text {
+                Layout.fillWidth: true
+                visible: root.notice === "Unsaved service draft restored."
+                text: root.notice
+                textFormat: Text.PlainText
+                color: root.foreground
+                font.pixelSize: Style.font.bodySmall
+              }
+              Ui.TextField { id: addGroupInput; Layout.fillWidth: true; placeholderText: "Group"; text: root.addDraft.group; onTextChanged: root.service.updateAddServiceDraft("group", text) }
+              Ui.TextField { id: newNameInput; Layout.fillWidth: true; placeholderText: "Service name"; text: root.addDraft.name; onTextChanged: root.service.updateAddServiceDraft("name", text) }
+              Ui.TextField { id: newHrefInput; Layout.fillWidth: true; placeholderText: "http:// or https:// service address"; text: root.addDraft.href; onTextChanged: root.service.updateAddServiceDraft("href", text) }
+              Ui.TextField { id: newDescriptionInput; Layout.fillWidth: true; placeholderText: "Description (optional)"; text: root.addDraft.description; onTextChanged: root.service.updateAddServiceDraft("description", text) }
+              Ui.TextField { id: newIconInput; Layout.fillWidth: true; placeholderText: "Icon (optional)"; text: root.addDraft.icon; onTextChanged: root.service.updateAddServiceDraft("icon", text) }
               RowLayout {
-                Ui.Button { text: root.service.mcpBusy ? "Adding…" : "Add service"; enabled: root.writeControlsReady; onClicked: root.addService() }
-                Ui.Button { text: "Cancel"; enabled: !root.service.mcpBusy; onClicked: root.addServiceVisible = false }
+                Ui.Button { text: "Continue"; enabled: root.writeControlsReady && !root.service.mcpBusy; onClicked: root.addService() }
+                Ui.Button { text: "Cancel"; enabled: !root.service.mcpBusy; onClicked: root.closeAddServiceForm() }
               }
             }
           }
 
           Rectangle {
             Layout.fillWidth: true
-            visible: root.yamlEditorOpen || root.yamlViewOpen
+            visible: root.yamlViewOpen
             implicitHeight: yamlColumn.implicitHeight + Style.space(14)
             radius: Math.min(4, Style.cornerRadius)
             color: root.bar ? root.bar.background : Color.popups.background
@@ -1131,17 +1147,14 @@ Ui.Panel {
                 QQC.TextArea {
                   id: yamlInput
                   text: root.yamlText
-                  onTextChanged: root.yamlText = text
                   font.family: "monospace"
                   wrapMode: TextEdit.NoWrap
                   selectByMouse: true
-                  readOnly: root.yamlViewOpen || root.yamlConfirmOpen || root.yamlLoading
+                  readOnly: true
                 }
               }
               RowLayout {
-                Ui.Button { text: root.yamlLoading ? "Working…" : "Validate & Save"; visible: !root.yamlViewOpen; enabled: root.writeControlsReady && !root.yamlLoading; onClicked: root.saveYaml() }
-                Ui.Button { text: "Restore previous version"; visible: !root.yamlViewOpen && root.restoreAvailable; enabled: root.writeControlsReady && !root.yamlLoading; onClicked: root.beginRestore() }
-                Ui.Button { text: "Close"; enabled: !root.yamlLoading; onClicked: root.closeYamlEditor() }
+                Ui.Button { text: "Close"; enabled: !root.yamlLoading; onClicked: root.closeYamlViewer() }
               }
             }
           }
@@ -1163,16 +1176,16 @@ Ui.Panel {
             Layout.fillWidth: true
             Ui.Button { text: "Refresh"; enabled: !root.service.refreshing; onClicked: { root.service.refresh(); root.service.checkMcpIfStale() } }
             Ui.Button {
-              text: "+ Add service"
+              text: root.addServiceVisible ? "Close form" : "+ Add service"
               enabled: root.writeControlsReady
               visible: root.writeControlsReady
-              onClicked: { root.addServiceVisible = !root.addServiceVisible; root.yamlEditorOpen = false; root.notice = "" }
+              onClicked: root.addServiceVisible ? root.closeAddServiceForm() : root.openAddServiceForm()
             }
             Ui.Button {
               text: root.yamlLoading ? "Reading…" : "View services.yaml"
               enabled: root.service.mcpAuthenticated && root.service.mcpReadEnabled && !root.service.mcpBusy
               visible: root.service.mcpAuthenticated && root.service.mcpReadEnabled
-              onClicked: { root.addServiceVisible = false; root.requestYamlView() }
+              onClicked: root.requestYamlView()
             }
             Item { Layout.fillWidth: true }
             Ui.Button { text: "Open Homepage"; enabled: Boolean(root.service.baseUrl); onClicked: root.openUrl(root.service.baseUrl) }
@@ -1198,8 +1211,12 @@ Ui.Panel {
       Ui.ConfirmDialog {
         anchors.fill: parent
         z: 10
-        opened: root.addConfirmOpen
-        message: "Add “" + Model.cleanText(root.newName, Model.LIMITS.name) + "” to “" + Model.cleanText(root.newGroup, Model.LIMITS.groupName) + "” at " + Model.safeHttpUrl(root.newHref) + "?"
+        opened: root.addConfirmOpen && root.addServiceVisible
+        message: "Add temporary service?\n\nGroup:\n" + Model.cleanText(root.addDraft.group, Model.LIMITS.groupName) +
+          "\n\nName:\n" + Model.cleanText(root.addDraft.name, Model.LIMITS.name) +
+          "\n\nURL:\n" + Model.safeHttpUrl(root.addDraft.href) +
+          (root.addDraft.description.trim() ? "\n\nDescription:\n" + Model.cleanText(root.addDraft.description, Model.LIMITS.description) : "") +
+          (root.addDraft.icon.trim() ? "\n\nIcon:\n" + Model.cleanText(root.addDraft.icon, Model.LIMITS.icon) : "")
         cancelText: "Cancel"
         confirmText: "Add service"
         background: root.bar ? root.bar.background : Color.popups.background
@@ -1208,23 +1225,6 @@ Ui.Panel {
         fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
         onCanceled: root.cancelAddConfirmation()
         onConfirmed: root.confirmAddService()
-      }
-
-      Ui.ConfirmDialog {
-        anchors.fill: parent
-        z: 11
-        opened: root.yamlConfirmOpen
-        message: root.yamlPendingRestore
-          ? "Verification failed after a write. Restore the previous services.yaml snapshot? This may overwrite newer Homepage edits."
-          : "Homepage validated services.yaml. Replace the current file? The YAML will be sent to Homepage and may contain credentials."
-        cancelText: "Cancel"
-        confirmText: root.yamlPendingRestore ? "Restore previous" : "Write services.yaml"
-        background: root.bar ? root.bar.background : Color.popups.background
-        foreground: root.foreground
-        selectedText: Color.accent
-        fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-        onCanceled: root.cancelYamlConfirmation()
-        onConfirmed: root.confirmYamlSave()
       }
 
       Ui.ConfirmDialog {

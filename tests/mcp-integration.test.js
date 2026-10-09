@@ -113,7 +113,7 @@ function fixtureToolCaller(fixture) {
   };
 }
 
-test("in-memory Homepage MCP read-only phase lists tools and reads services.yaml without any write call", async () => {
+test("in-memory Homepage MCP discovery reads services.yaml without a write unless explicitly called", async () => {
   const fixture = createHomepageServer({ token });
   const listed = await fixtureRpc(fixture, "tools/list", {}, 1);
   const tools = Mcp.parseTools(listed.result);
@@ -128,7 +128,9 @@ test("in-memory Homepage MCP read-only phase lists tools and reads services.yaml
   const rpc = await fixtureRpc(fixture, toolRequest.method, toolRequest.params, 2);
   assert.match(Mcp.textFromToolResult(rpc.result).text, /Proxmox/);
   assert.equal(Mcp.makeToolCall(3, "read_config_file", { file: "settings.yaml" }), null);
-  assert.equal(Mcp.makeToolCall(4, "write_config_file", { file: "services.yaml", content: "bad" }), null);
+  assert.ok(Mcp.makeToolCall(4, "write_config_file", { file: "services.yaml", content: "bad" }));
+  assert.equal(Mcp.makeToolCall(5, "write_config_file", { file: "widgets.yaml", content: "bad" }), null);
+  assert.equal(Mcp.makeToolCall(6, "add_info_widget", { name: "bad" }), null);
   assert.deepEqual(fixture.state.calls.map(call => [call.method, call.name]), [["tools/list", ""], ["tools/call", "read_config_file"]]);
   assert.equal(fixture.state.writeCount, 0);
 });
@@ -154,9 +156,11 @@ test("Homepage fixture lists capabilities and reads only services.yaml over veri
   assert.match(Mcp.textFromToolResult(read.result).text, /Proxmox/);
 
   const attemptedOtherFile = Mcp.makeToolCall(3, "read_config_file", { file: "widgets.yaml" });
-  const attemptedWrite = Mcp.makeToolCall(4, "write_config_file", { file: "services.yaml", content: "" });
+  const allowedOnlyForRollback = Mcp.makeToolCall(4, "write_config_file", { file: "services.yaml", content: "" });
   assert.equal(attemptedOtherFile, null);
-  assert.equal(attemptedWrite, null);
+  assert.ok(allowedOnlyForRollback);
+  assert.equal(Mcp.makeToolCall(5, "write_config_file", { file: "widgets.yaml", content: "" }), null);
+  assert.equal(Mcp.makeToolCall(6, "add_info_widget", { name: "x" }), null);
   assert.equal(fixture.state.writeCount, 0);
   assert.deepEqual(fixture.state.calls.map(call => [call.method, call.name]), [
     ["tools/list", ""], ["tools/call", "read_config_file"]
