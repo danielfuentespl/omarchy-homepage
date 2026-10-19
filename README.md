@@ -54,6 +54,12 @@ omarchy plugin enable com.blogvirtualizado.omaops.homepage --section right
 
 ![Connected to Homepage with fictional groups and services](docs/screenshots/homepage-online-services.png)
 
+### Search and filter services
+
+Enter a service name, description, or group in the search field to filter the displayed list. This real Omarchy capture shows the matching results for `proxmox`.
+
+![OmaHomepage filtering services for a search query in Omarchy](assets/screenshots/homepage-search-proxmox.png)
+
 ## TLS and private certificates
 
 If the server certificate is valid for the system trust store, no import or manual trust is needed. OmaHomepage uses normal system TLS validation.
